@@ -3,7 +3,7 @@
 """
 dsh-ocr-local 一键自举安装：建 venv → 装依赖 → 下模型（幂等，可重复执行）。
 
-由插件 ocr_setup 工具 / install.sh / install.ps1 调用；只依赖 Python 标准库。
+由插件的 ocr_setup 工具调用，也可手动运行；只依赖 Python 标准库。
 
 用法:
     python setup.py                 # 完整安装（venv + 依赖 + 模型）

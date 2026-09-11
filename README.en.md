@@ -2,70 +2,88 @@
 
 [English](README.en.md) · [中文](README.md)
 
-[![npm version](https://img.shields.io/npm/v/dsh-ocr-local?style=flat-square&color=cb3837)](https://www.npmjs.com/package/dsh-ocr-local)
-[![license](https://img.shields.io/npm/l/dsh-ocr-local?style=flat-square)](LICENSE)
-[![GitHub](https://img.shields.io/badge/GitHub-balcoz%2Fdsh--ocr--local-2f81f7?style=flat-square)](https://github.com/balcoz/dsh-ocr-local)
+[![license](https://img.shields.io/npm/l/dsh-ocr-local?style=flat-square)](LICENSE) [![GitHub](https://img.shields.io/badge/GitHub-grelvan%2Fdsh--ocr--local-2f81f7?style=flat-square)](https://github.com/grelvan/dsh-ocr-local)
 
-A local OCR plugin for DeepSeek Harness: turn screenshots, error dialogs, chat
-logs and document photos into text. **Fully offline, free, and your images
-never leave your machine** — no vision model required.
+A **local OCR fallback** for DeepSeek Harness (Web): when the model a session is
+routed to **cannot accept image input**, this plugin reads the text out of a
+pasted image for it. When the model *can* see images, the plugin stays completely
+silent.
 
-## Multi-end support (TUI + Web)
+The engine is PP-OCRv5 + ONNX Runtime — **CPU-only, fully offline**, and your
+images never leave your machine.
 
-| End | How to paste an image | How it gets recognized |
+## When the plugin acts, and when it stays silent
+
+This is the most important table here. The decision is based on the input
+capabilities the session's **actually routed model** declares
+(`inputModalities`) — it is not a guess:
+
+| Model routed by the session | Plugin behaviour | What the model actually receives |
 | --- | --- | --- |
-| **TUI (terminal client)** | Ctrl+V / paste key / terminal menu paste | Automatic: the image enters the session → the plugin saves it locally → the text model calls `ocr_image` |
-| **Web** | press Ctrl+V / Cmd+V in the browser | Automatic: paste becomes a path in the composer → `ocr_image` reads it |
+| **Explicitly cannot accept images** (e.g. a text-only model) | ✅ **Acts**: the image is saved to a local cache and its path is injected, so the model calls `ocr_image` | Text. For these models the harness substitutes only `[image omitted because this model accepts text only; …]` — **no path at all**, so without this plugin the model cannot read the image |
+| **Explicitly accepts images** (multimodal model) | 🔇 **Silent**: no cache write, no hint injected | The image itself. The harness also prefixes a **read-only copy path**, so the model can call `ocr_image` on that path when it needs verbatim characters |
+| **Cannot be determined** (provider not registered / lookup failed / no modalities declared) | 🔇 **Silent** | Handled by the harness as usual. Better not to intrude than to add an OCR hint to a model that may well see images |
 
-Both paths converge on the same flow: **an image reaches the session, and
-`ocr_image` reads the text locally**. If your model supports vision (or a
-vision bridge is configured), the image goes through as-is, and the local-OCR
-hint coexists with the vision pipeline.
+"Silent when undetermined" is deliberate. If you genuinely want unconditional
+intervention, set `autoOcr: 'always'` (see Configuration below).
 
-## Quick start (~5 minutes)
+> On **unlisted model ids**: the DeepSeek adapter explicitly returns
+> `inputModalities: ["text"]` for ids that are not in the model catalog, so those
+> text-only routes are covered by row 1. Other providers that report no modality
+> information for undeclared models fall through to row 3 (silent).
+
+## Relationship to vision models
+
+The two paths do not interfere, because they operate at different layers:
+
+- **This plugin only does local OCR**: it caches the image and asks the model to
+  call `ocr_image`.
+- **Whether the image is sent to the model** is decided by model capability and
+  client configuration; the plugin does not interfere.
+
+So with a multimodal model you do not need to do anything: the plugin withdraws
+on its own. If you want the text read anyway, just tell the agent "read this
+image with ocr_image".
+
+## Quick start
 
 ### Step 1: Install the plugin
 
-DSH profiles are isolated, so install the plugin into **each profile you use**:
+DSH profiles are isolated, so install the plugin into **the profile you use**
+(the Web profile is usually called `web`).
+
+**From a local clone:**
 
 ```sh
-# Web
-npx -y @deepseek-ai/dsh plugin --profile web add dsh-ocr-local
-
-# TUI (replace <profile> with your terminal profile name)
-npx -y @deepseek-ai/dsh plugin --profile <profile> add dsh-ocr-local
+git clone https://github.com/grelvan/dsh-ocr-local.git
+npx -y @deepseek-ai/dsh plugin --profile web add ./dsh-ocr-local
 ```
 
-For the TUI end, **also run the install script once** to configure the paste
-key (on Windows it also rewrites the Windows Terminal keybindings, backed up in
-settings.json.bak):
+**Or straight from GitHub:**
 
 ```sh
-# Windows
-powershell -ExecutionPolicy Bypass -File install.ps1 -Profile <profile>
-
-# macOS / Linux
-./install.sh --profile <profile>
+npx -y @deepseek-ai/dsh plugin --profile web add github:grelvan/dsh-ocr-local
 ```
 
-Then **restart dsh** for the plugin to take effect.
+> The old npm release has been unpublished. Once it is republished,
+> `... plugin --profile web add dsh-ocr-local` works again.
 
-### Step 2: Prepare the engine (once)
+**Restart dsh** after installing, or the plugin will not take effect.
 
-Send any image to the agent and say:
+### Step 2: Prepare the recognition engine (once)
 
-> 识别这张图片 / Read the text in this image
+Send the agent any image and say:
 
-If the engine is not installed yet, the tool will tell you what's missing.
-Then ask the agent:
+> read the text in this image
 
-> 用 ocr_setup 工具安装 OCR 环境
+If the engine is not ready yet, the tool tells you what is missing. Then say:
 
-The plugin will do three things automatically: **create a virtualenv → install
-Python dependencies → download the recognition models** (~20MB). After that,
-recognition runs locally in seconds.
+> install the OCR environment with the ocr_setup tool
 
-> Prefer the manual way? (same thing; replace `<profile>` with yours, e.g. `web`)
+The plugin will **create a virtualenv → install Python dependencies → download
+the models** (about 20MB). After that every recognition runs locally in seconds.
+
+> Manual install works too (replace `<profile>` with your profile name, e.g. `web`):
 >
 > ```sh
 > python ~/.dsh/profiles/<profile>/node_modules/dsh-ocr-local/ocr/setup.py
@@ -73,58 +91,46 @@ recognition runs locally in seconds.
 
 ### Step 3: Use it
 
-**Way A: paste a screenshot (most common)**
+**Option A: paste a screenshot (most common)**
 
-- Web: press Ctrl+V / Cmd+V in the composer.
-- TUI: press the paste key (see the table below).
+Press Ctrl+V / Cmd+V in the Web composer. The image enters the session through
+the browser's native attachment flow, and then splits according to the table
+above: text-only model → this plugin covers it; multimodal model → the model
+looks at the image directly.
 
-The image is saved to a path, inserted into the input, and the agent
-automatically calls `ocr_image` to read the text.
+**Option B: give the agent a path**
 
-**Way B: give the agent a path**
+Send the agent the absolute path of an image file and say "read this image".
 
-Send the absolute path of an image file and ask the agent to read it.
+## What it handles / limits
 
-## Paste key (TUI)
-
-The shortcut configured at install time, `ctrl+v` by default; `ctrl+shift+v`
-and `alt+v` are also available. Pick `alt+v` or `ctrl+shift+v` if you don't
-want to touch your Ctrl+V text-paste habit:
-
-| paste key | image paste | text paste |
-| --- | --- | --- |
-| `ctrl+v` (default) | Ctrl+V | Ctrl+Shift+V |
-| `ctrl+shift+v` | Ctrl+Shift+V | Ctrl+V |
-| `alt+v` | Alt+V | Ctrl+V |
-
-To change the key, re-run the install script
-(`install.ps1 -PasteKey <new>` / `install.sh --key <new>`) — it switches and
-cleans up the old binding. The patch is idempotent.
-
-## What it handles well / its limits
-
-| ✅ Good at | ⚠️ Mediocre at |
+| ✅ Good at | ⚠️ Mediocre |
 | --- | --- |
-| Screenshots, error dialogs, chat logs | Very small text (e.g. 4px) — occasional wrong characters |
-| Mixed Chinese + English, long lines | Complex backgrounds, stylized fonts, handwriting |
+| Screenshots, error dialogs, chat logs | Very small text (e.g. 4px) may have a few wrong characters |
+| Mixed Chinese + English, long paragraphs | Complex backgrounds, stylized fonts, handwriting |
 | Dark-theme screenshots (auto-inverted) | Blurry or heavily compressed images |
 
-Lines with **tiny text or low confidence are flagged ⚠** in the output, so you
-can tell which characters not to fully trust.
+In the output, **lines that are too small or low-confidence are flagged ⚠**, so
+you can tell which characters are not fully trustworthy.
 
-## Configuration (optional — defaults work out of the box)
+### Why local OCR is still worth it for verbatim fidelity
 
-### Recognition modes and switches
+A multimodal model looking at an image and local OCR reading it do **not** get
+the same amount of information:
 
-| Scenario | Behavior | Switch |
+| | Multimodal model looking directly | Local OCR |
 | --- | --- | --- |
-| **Text-only model** | Pasted/attached images are auto-saved to the local cache and a path hint is injected into the model's context → the model calls `ocr_image` for local recognition | This plugin's `autoOcr` (default `true`; set `false` to disable the auto hint — `ocr_image` still works manually) |
-| **Vision-capable model** | The image goes through to the model as-is for direct viewing; the local-OCR hint coexists without interference | Decided by **your model/client** config (the model declares vision capability or a vision bridge is enabled) — **this plugin does not intervene** |
+| Resolution reaching the model | Bounded by the harness per-image pixel budget (640,000 px by default). A 1920×1080 screenshot is downscaled to about 1066×600 | Detection runs at a 736px longest side, but **recognition crops from the original image**, enlarging small text first (glyph height floor 20px, up to 6×) |
+| Output | A paraphrase by the model, with **no signal about what it is unsure of** | Per-line text plus confidence / glyph height / box coordinates, with low-confidence lines flagged ⚠ |
+| Best for | Understanding what is happening in the screenshot | Copying code, checking error messages, verifying hashes, reading table numbers |
 
-`autoOcr` only controls the "local OCR hint" half: once an image enters the
-session, the plugin saves it and prompts the model to recognize it. Whether the
-image is also sent to a vision model is decided by your model/client and is
-independent of `autoOcr` — both can be on at the same time.
+An honest boundary note: the detection stage's 736px longest side is **more
+conservative than the multimodal path's ~1066px**, so very small text in a
+full-screen 4K screenshot can be missed here too. The accurate claim is
+**"lines it does detect are transcribed more precisely"**, not "unlimited
+resolution".
+
+## Configuration (optional; defaults are fine)
 
 Config file: `~/.dsh/profiles/web/cordis.patch.yml`
 
@@ -133,69 +139,78 @@ Config file: `~/.dsh/profiles/web/cordis.patch.yml`
     - id: ocr
       name: 'dsh-ocr-local'
       config:
-        autoOcr: true                                   # optional: false disables auto OCR hint on pasted images
-        pythonPath: ~/miniconda3/envs/ocr/bin/python   # optional: which Python to use
-        modelDir: ~/.dsh-ocr/models                     # optional: models directory
-        pasteToPath: true                               # optional: false disables web paste-to-path
-        maxCacheFiles: 300                              # optional: paste cache file cap
-        maxCacheAgeDays: 30                             # optional: paste cache retention
+        autoOcr: true                                   # see the table below
+        pythonPath: ~/miniconda3/envs/ocr/bin/python   # optional: pick a Python
+        modelDir: ~/.dsh-ocr/models                     # optional: model directory
+        maxCacheFiles: 300                              # optional: cache file cap
+        maxCacheAgeDays: 30                             # optional: cache retention
 ```
 
-Useful environment variables:
+`autoOcr` has three states:
+
+| Value | Behaviour |
+| --- | --- |
+| `true` (default) | Automatic: acts **only when the model explicitly cannot accept images** |
+| `false` | No automatic intervention at all. The model can still call `ocr_image` on request |
+| `'always'` | Unconditional intervention (a hint is injected even for vision-capable models). The old 0.3.x behaviour; useful for troubleshooting |
+
+Environment variables:
 
 | Variable | Purpose |
 | --- | --- |
-| `DSH_OCR_MODELS_MIRROR` | Model download mirror prefix (e.g. `https://ghproxy.com/` if GitHub is slow) |
-| `DSH_OCR_PYTHON` | Which Python to use for OCR (auto-detected by default) |
-| `DSH_OCR_MODELS` | Models directory (default `~/.dsh-ocr/models`) |
+| `DSH_OCR_MODELS_MIRROR` | Mirror prefix for model downloads (e.g. `https://ghproxy.com/`) |
+| `DSH_OCR_PYTHON` | Which Python the OCR engine uses (auto-detected by default) |
+| `DSH_OCR_MODELS` | Model directory (defaults to `~/.dsh-ocr/models`) |
 
 ## FAQ
 
+**Q: I pasted an image but the model says it cannot see it.**
+First check whether the current model is text-only (the only case this plugin is
+meant to cover). If it is, verify the engine is ready ("check the OCR
+environment with ocr_setup"). With a multimodal model the model simply looks at
+the image, and this plugin is silent by design.
+
 **Q: "Environment not ready" / "missing dependencies"?**
-Ask the agent: 用 ocr_setup 工具安装 OCR 环境 — it fixes everything
-automatically. Or run `python ~/.dsh/profiles/web/node_modules/dsh-ocr-local/ocr/setup.py`.
+Tell the agent "install the OCR environment with ocr_setup", or run
+`python ~/.dsh/profiles/web/node_modules/dsh-ocr-local/ocr/setup.py` manually.
 
 **Q: Model download is slow or fails?**
-Set a mirror and re-run (idempotent):
+Set the mirror and retry (idempotent):
 `DSH_OCR_MODELS_MIRROR=https://ghproxy.com/ python .../ocr/setup.py`
 
-**Q: pip complains about externally-managed-environment (PEP 668)?**
-Do **not** use `--break-system-packages`. Just run `ocr/setup.py` — it creates a
-virtualenv and works around the system-Python restriction.
+**Q: pip reports externally-managed-environment (PEP 668)?**
+Do not add `--break-system-packages`. Use `ocr/setup.py` — it creates a
+virtualenv automatically and sidesteps the system Python restriction.
 
-**Q: Pasting an image does nothing in the TUI?**
-First make sure the terminal client can read clipboard images: Windows/macOS
-work out of the box; on Linux (Wayland) install `wl-clipboard` (or `xclip` on
-X11), otherwise the terminal can't read clipboard images and paste fails
-silently. Once the image reaches the session, this plugin saves it and prompts
-the model to run `ocr_image`.
+**Q: The recognition has wrong characters.**
+Check the ⚠ flags in the output. For very small text the engine does misread:
+scale the original image up and retry, or ask the agent to double-check that line.
 
-**Q: Pasting an image does nothing in the Web UI?**
-Make sure the plugin is installed in the `web` profile, `pasteToPath` isn't set
-to `false`, and you restarted `dsh web`.
+**Q: Why does the plugin no longer intercept my paste?**
+As of 0.4.0 it does not. The Web composer already intakes pasted images through
+its native attachment flow; intercepting only prevented vision-capable models
+from seeing the image. The old `pasteToPath` config key is gone — you can delete it.
 
-**Q: Wrong characters in the result?**
-Check the ⚠ flags. Tiny text genuinely trips up the model: try a larger
-screenshot, or ask the agent to double-check the flagged lines.
+## How it works (one sentence)
 
-## How it works (one line)
+A pasted image enters the session as an attachment through the native flow →
+the plugin listens for `user/message` events → it queries the routed model's
+`inputModalities` → **only when the model explicitly cannot accept images** does
+it save the image to `~/.dsh/ocr/cache` and inject its path → the model calls
+`ocr_image` → local PP-OCRv5 models (ONNX Runtime, CPU-only) → text. Models are
+downloaded to `~/.dsh-ocr/models` on first use and everything is offline
+afterwards. More detail in [docs/usage.md](docs/usage.md).
 
-Images pasted from any end (TUI paste / web paste / attachments) enter the
-session; the plugin saves them to `~/.dsh/ocr/cache` and prompts the model,
-which calls `ocr_image` → local PP-OCRv5 models (ONNX Runtime, CPU only) →
-text. Models are downloaded to `~/.dsh-ocr/models` on first use, then
-everything is offline. More details in [docs/usage.md](docs/usage.md).
-
-## Upgrade
+## Upgrading
 
 ```sh
 npx -y @deepseek-ai/dsh plugin --profile web update dsh-ocr-local
 ```
 
-If pasting stops working after a TUI upgrade (plugin files overwritten), just
-re-run the install script (idempotent).
+If you installed from a local directory, `git pull` and re-run `add` in the
+plugin directory.
 
 ## License
 
-MIT (code). Recognition models Apache-2.0 (PaddleOCR), downloaded at install
-time. See [LICENSE](LICENSE).
+MIT (code). The recognition models are Apache-2.0 (PaddleOCR) and are downloaded
+during setup. See [LICENSE](LICENSE).

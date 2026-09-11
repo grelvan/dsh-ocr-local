@@ -1,12 +1,12 @@
 {
   "name": "dsh-ocr-local",
-  "description": "Local OCR for DeepSeek Harness: paste/attach an image, get its text via PP-OCRv5 + ONNX Runtime, fully offline. TUI (cc-tui) and Web. / DeepSeek Harness 本地 OCR 插件：图片转文字，PP-OCRv5 + ONNX Runtime，完全离线，支持 TUI 与 Web。",
-  "version": "0.3.3",
+  "description": "Local OCR fallback for DeepSeek Harness (Web): when the routed model cannot accept image input, a pasted image is saved locally and its text read by PP-OCRv5 + ONNX Runtime — fully offline, no vision model required. / DeepSeek Harness 本地 OCR 兜底插件（Web）：当接入的模型不支持图片输入时，自动把图片存到本地并用 PP-OCRv5 读出文字，完全离线。",
+  "version": "0.4.0",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/balcoz/dsh-ocr-local.git"
+    "url": "git+https://github.com/grelvan/dsh-ocr-local.git"
   },
   "keywords": [
     "deepseek",
@@ -16,34 +16,32 @@
     "ocr",
     "paddleocr",
     "onnx",
-    "offline"
+    "offline",
+    "text-only-model",
+    "fallback"
   ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "inject": [],
-      "platform": "web",
-      "immediately": true
     }
   },
   "exports": {
     ".": "./dsh/index.js",
     "./dsh": "./dsh/index.js",
-    "./client": "./dsh/client.js",
+    "./capability": "./dsh/capability.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
     "dsh",
     "ocr",
-    "patch",
-    "install.ps1",
-    "install.sh",
+    "!ocr/__pycache__",
     "cordis.patch.yml",
     "README.en.md"
   ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-tools": "^0.0.1-rc.1"

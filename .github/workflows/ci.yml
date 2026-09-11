@@ -18,15 +18,23 @@ jobs:
       - name: Syntax check (JS)
         run: |
           node --check dsh/index.js
-          node --check dsh/client.js
-          node --check patch/apply-cc-tui-patch.mjs
-          node --check patch/apply-wt-key.mjs
+          node --check dsh/capability.js
+
+      - name: Peer dep for the integration test
+        run: npm install --no-save --no-package-lock --no-audit --no-fund @deepseek-ai/dsh-tools@0.0.1-rc.1
+
+      - name: Unit + integration tests
+        run: npm test
 
       - name: Python syntax check
         run: |
-          python3 -m py_compile ocr/ocr.py ocr/download_models.py ocr/setup.py
+          # ast.parse instead of py_compile: never leave __pycache__ behind
+          # (package.json `files` ships ocr/ wholesale, so stray .pyc would ship).
+          python3 -c "import ast,sys; [ast.parse(open(f, encoding='utf-8').read(), f) for f in sys.argv[1:]]; print('python syntax OK')" ocr/ocr.py ocr/download_models.py ocr/setup.py
 
       - name: Doctor smoke (works without deps)
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
           python3 ocr/ocr.py --doctor | python3 -c "import json,sys; d=json.load(sys.stdin); assert set(['python','dependencies','models']) <= set(d), 'doctor JSON shape'; print('doctor OK:', d['ok'])"
           python3 ocr/setup.py --check --json >/dev/null || true
@@ -36,10 +44,12 @@ jobs:
         run: |
           npm pack --dry-run
           test -f package.json
-          node -e "const p=require('./package.json'); if(!p.dsh?.bundle?.patch) { console.error('missing dsh.bundle manifest'); process.exit(1) }; console.log('dsh.bundle OK:', p.dsh.bundle.patch)"
-
-      - name: Patch scripts dry-run (idempotent, no writes)
-        run: |
-          node patch/apply-wt-key.mjs --key ctrl+v --file test/fixtures/wt-empty.json --dry-run >/dev/null
-          node patch/apply-wt-key.mjs --key alt+v --file test/fixtures/wt-empty.json --dry-run >/dev/null
-          echo "apply-wt-key dry-run OK"
+          node -e "const p=require('./package.json'); if(!p.dsh?.bundle?.patch) { console.error('missing dsh.bundle manifest'); process.exit(1) }; if(p.dsh.client) { console.error('dsh.client manifest is gone in 0.4.0 (web-only, no paste interception)'); process.exit(1) }; console.log('dsh.bundle OK:', p.dsh.bundle.patch)"
+          # Nothing may ship that 0.4.0 removed, and no bytecode may ship at all.
+          for banned in dsh/client.js patch install.sh install.ps1; do
+            if [ -e "$banned" ]; then echo "unexpected path present: $banned"; exit 1; fi
+          done
+          if npm pack --dry-run 2>&1 | grep -q "__pycache__\|\.pyc"; then
+            echo "bytecode would ship in the tarball"; exit 1
+          fi
+          echo "package contents OK"

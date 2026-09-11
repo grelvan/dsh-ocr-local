@@ -2,46 +2,60 @@
 
 [English](README.en.md) · [中文](README.md)
 
-[![npm version](https://img.shields.io/npm/v/dsh-ocr-local?style=flat-square&color=cb3837)](https://www.npmjs.com/package/dsh-ocr-local) [![license](https://img.shields.io/npm/l/dsh-ocr-local?style=flat-square)](LICENSE) [![GitHub](https://img.shields.io/badge/GitHub-balcoz%2Fdsh--ocr--local-2f81f7?style=flat-square)](https://github.com/balcoz/dsh-ocr-local)
+[![license](https://img.shields.io/npm/l/dsh-ocr-local?style=flat-square)](LICENSE) [![GitHub](https://img.shields.io/badge/GitHub-grelvan%2Fdsh--ocr-local-2f81f7?style=flat-square)](https://github.com/grelvan/dsh-ocr-local)
 
-给 DeepSeek Harness 装一个「本地文字识别」：把截图、报错弹窗、聊天记录、文档照片
-变成文字。**完全离线、免费，图片不会离开你的电脑**，也不需要视觉大模型。
+给 DeepSeek Harness（Web 端）装一个**本地 OCR 兜底**：当会话路由到的模型**不支持图片输入**时，
+把图片里的文字读出来给模型；模型能看图时，插件完全静默、不插手。
 
-## 多端支持（TUI + Web）
+识别引擎是 PP-OCRv5 + ONNX Runtime，**纯 CPU、完全离线**，图片不会离开你的电脑。
 
-| 端 | 怎么粘贴图片 | 识别方式 |
+## 插件什么时候生效，什么时候静默
+
+这是理解本插件最重要的一张表。判定基于当前会话实际路由到的模型**声明的输入能力**
+（`inputModalities`），而不是猜：
+
+| 会话路由到的模型 | 插件行为 | 模型实际拿到什么 |
 | --- | --- | --- |
-| **TUI（终端客户端）** | 终端里 Ctrl+V / 粘图键 / 终端菜单粘贴 | 自动：图片进会话 → 插件存到本地缓存 → 文本模型调 `ocr_image` 识别 |
-| **Web** | 浏览器里直接 Ctrl+V / Cmd+V 粘贴图片 | 自动：粘贴即转成路径插入输入框 → `ocr_image` 识别 |
+| **明确声明不支持图片**（如纯文本模型） | ✅ **生效**：图片存到本地缓存，并注入路径提示 → 模型调 `ocr_image` 识别 | 文字。Harness 对这类模型只给一句 `[image omitted because this model accepts text only; …]`，**没有任何路径**，所以没有本插件模型就完全读不到图 |
+| **明确声明支持图片**（多模态模型） | 🔇 **静默**：不存缓存、不注入提示 | 图片本身。Harness 还会在图片前附一条**只读副本路径**，模型想逐字核对时可以直接对那个路径调 `ocr_image` |
+| **无法确定**（provider 未注册 / 查询失败 / 没声明模态） | 🔇 **静默** | 按 Harness 原样处理。宁可不打扰，也不在一个可能能看图的模型上多塞提示 |
 
-两条路最终都汇合到同一个流程：**图片到达会话 → `ocr_image` 本地读出文字**。
-如果你的模型支持识图（或配置了视觉桥），图片会原样送达模型，本地 OCR 提示与
-视觉链路互不干扰、并存生效。
+"无法确定就静默"是刻意的。如果你确实需要无条件介入，把 `autoOcr` 设成 `'always'`（见下方配置）。
 
-## 快速开始（约 5 分钟）
+> 关于「未登记的 model id」：DeepSeek 适配器对没写进模型目录的 id 会**显式**返回
+> `inputModalities: ["text"]`，所以这类纯文本路由会被上表第一行正确覆盖。
+> 其它 provider 若对未声明模型返回「无模态信息」，则落到第三行（静默）。
+
+## 与视觉模型的关系
+
+两条链路互不干扰，因为它们在**不同的层**做事：
+
+- **插件只管本地 OCR**：把图存到本地、提示模型去调 `ocr_image`。
+- **图要不要发给模型**由模型能力 / 客户端配置决定，插件不干预。
+
+所以多模态模型下你不需要为本插件做任何事：它会自己退场。想手动让它读图里的字，
+随时可以直接对 agent 说「用 ocr_image 读这张图」。
+
+## 快速开始
 
 ### 第 1 步：安装插件
 
-DSH 的 profile 互相隔离，插件要装到**每个你想用的 profile**：
+DSH 的 profile 互相隔离，插件要装到**你要用的那个 profile**（Web 端通常叫 `web`）。
+
+**从本地克隆安装：**
 
 ```sh
-# Web 端
-npx -y @deepseek-ai/dsh plugin --profile web add dsh-ocr-local
-
-# TUI 端（把 <profile> 换成你的终端 profile 名）
-npx -y @deepseek-ai/dsh plugin --profile <profile> add dsh-ocr-local
+git clone https://github.com/grelvan/dsh-ocr-local.git
+npx -y @deepseek-ai/dsh plugin --profile web add ./dsh-ocr-local
 ```
 
-TUI 端装完后，**再运行一次安装脚本**来配置终端粘图键
-（Windows 还会自动改写 Windows Terminal 键绑定，备份在 settings.json.bak）：
+**或直接从 GitHub 安装：**
 
 ```sh
-# Windows
-powershell -ExecutionPolicy Bypass -File install.ps1 -Profile <profile>
-
-# macOS / Linux
-./install.sh --profile <profile>
+npx -y @deepseek-ai/dsh plugin --profile web add github:grelvan/dsh-ocr-local
 ```
+
+> npm 上的旧版本已下架。重新发布后也可以用 `... plugin --profile web add dsh-ocr-local`。
 
 装完**重启 dsh**，插件才会生效。
 
@@ -55,10 +69,10 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Profile <profile>
 
 > 用 ocr_setup 工具安装 OCR 环境
 
-插件会自动完成三件事：**建虚拟环境 → 装 Python 依赖 → 下载识别模型**
-（约 20MB），之后每次识别都在本地秒级完成。
+插件会自动完成三件事：**建虚拟环境 → 装 Python 依赖 → 下载识别模型**（约 20MB），
+之后每次识别都在本地秒级完成。
 
-> 想手动装也可以（和上面等价，把 `<profile>` 换成你的 profile 名，如 `web`）：
+> 想手动装也可以（把 `<profile>` 换成你的 profile 名，如 `web`）：
 >
 > ```sh
 > python ~/.dsh/profiles/<profile>/node_modules/dsh-ocr-local/ocr/setup.py
@@ -68,28 +82,12 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Profile <profile>
 
 **方式 A：粘贴截图（最常用）**
 
-- Web：在输入框里按 Ctrl+V / Cmd+V
-- TUI：按粘图键（见下表）
-
-图片会自动保存成路径插入输入框，agent 会自动调 `ocr_image` 读出里面的文字。
+在 Web 输入框里按 Ctrl+V / Cmd+V。图片走浏览器原生的附件流程进入会话，
+之后按上面的表自动分流：纯文本模型 → 本插件兜底；多模态模型 → 模型直接看图。
 
 **方式 B：告诉 agent 图片路径**
 
 把图片文件的绝对路径发给 agent，说「识别这张图片」。
-
-## 粘图键（TUI 端）
-
-安装时指定的快捷键，默认 `ctrl+v`，可选 `ctrl+shift+v` / `alt+v`。
-不想占用你习惯的 Ctrl+V 文本粘贴，就选 `alt+v` 或 `ctrl+shift+v`：
-
-| 粘图键 | 粘图（发图片） | 文本粘贴 |
-| --- | --- | --- |
-| `ctrl+v`（默认） | Ctrl+V | Ctrl+Shift+V |
-| `ctrl+shift+v` | Ctrl+Shift+V | Ctrl+V |
-| `alt+v` | Alt+V | Ctrl+V |
-
-换粘图键：重跑安装脚本 `install.ps1 -PasteKey <新键>` / `install.sh --key <新键>`，
-会自动切换并清理旧绑定。补丁幂等，重复运行自动跳过。
 
 ## 能识别什么 / 有什么限制
 
@@ -101,17 +99,21 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Profile <profile>
 
 识别结果里，**字太小或置信度低的行会标注 ⚠**，方便你判断哪些字不能全信。
 
-## 配置（可选，默认不用动）
+### 为什么"逐字保真"这件事仍然值得用本地 OCR
 
-### 识别方式与开关
+多模态模型看图和本地 OCR 读图，拿到的**信息量不一样**：
 
-| 场景 | 行为 | 开关 |
+| | 多模态模型直接看图 | 本地 OCR |
 | --- | --- | --- |
-| **文本模型（不支持识图）** | 粘贴/附带的图片自动保存到本地缓存，并向模型注入路径提示 → 模型调 `ocr_image` 本地识别 | 本插件 `autoOcr`（默认 `true`；设 `false` 关闭自动提示，仍可手动让模型调 `ocr_image`） |
-| **视觉模型（支持识图）** | 图片原样送达模型，由模型直接看图；本地 OCR 提示并存、不干扰 | 由**你的模型/客户端**配置决定（模型声明识图能力或启用视觉桥），**本插件不干预** |
+| 送进模型的分辨率 | 受限于 Harness 的每图像素预算（默认 640,000 px）。1920×1080 的截图会被压到约 1066×600 | 检测阶段最长边 736px，但**识别阶段是从原图裁块**，小字还会先放大（字高下限 20px，最多 6×） |
+| 输出 | 模型的一段转述，**不告诉你它哪里不确定** | 逐行文本 + 每行置信度 / 字高 / 坐标框，低置信行标 ⚠ |
+| 适合 | 看懂截图里发生了什么 | 抄代码、对报错信息、核 hash、读表格数字 |
 
-`autoOcr` 只管"本地 OCR 提示"这一半：图片进会话后插件保存并提示模型识别。
-"图片要不要发给视觉模型"由模型/客户端决定，与 `autoOcr` 无关——两件事可以同时开。
+诚实的边界说明：检测阶段的最长边限制是 736px，**比多模态链路的约 1066px 更保守**，
+所以 4K 全屏截图里极小的字，本插件也可能漏检。准确的说法是
+**"检得到的行，认得更准"**，而不是"分辨率无上限"。
+
+## 配置（可选，默认不用动）
 
 配置文件：`~/.dsh/profiles/web/cordis.patch.yml`
 
@@ -120,13 +122,20 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Profile <profile>
     - id: ocr
       name: 'dsh-ocr-local'
       config:
-        autoOcr: true                                   # 可选：false 关闭「粘贴图片自动提示识别」
+        autoOcr: true                                   # 见下表
         pythonPath: ~/miniconda3/envs/ocr/bin/python   # 可选：指定 Python
         modelDir: ~/.dsh-ocr/models                     # 可选：模型目录
-        pasteToPath: true                               # 可选：false 关闭 web「粘贴图片转路径」
-        maxCacheFiles: 300                              # 可选：粘贴缓存最多文件数
-        maxCacheAgeDays: 30                             # 可选：粘贴缓存保留天数
+        maxCacheFiles: 300                              # 可选：图片缓存最多文件数
+        maxCacheAgeDays: 30                             # 可选：图片缓存保留天数
 ```
+
+`autoOcr` 三态：
+
+| 值 | 行为 |
+| --- | --- |
+| `true`（默认） | 自动判定：**只有模型明确不支持图片输入时**才介入 |
+| `false` | 完全关闭自动介入。仍可手动让模型调 `ocr_image` |
+| `'always'` | 无条件介入（即使模型能看图也注入提示）。旧版 0.3.x 的行为，排查问题时可用 |
 
 常用环境变量：
 
@@ -137,6 +146,11 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Profile <profile>
 | `DSH_OCR_MODELS` | 模型存放目录（默认 `~/.dsh-ocr/models`） |
 
 ## 常见问题
+
+**Q：粘贴了图片，但模型说看不到图？**
+先确认当前模型是不是纯文本模型（这是本插件唯一该生效的场景）。如果是，检查引擎是否就绪
+（对 agent 说「用 ocr_setup 检查 OCR 环境」）。如果用的是多模态模型，模型直接看图即可，
+本插件按设计就是静默的。
 
 **Q：提示「环境未就绪」/「缺少依赖」？**
 对 agent 说「用 ocr_setup 安装 OCR 环境」即可自动修复；或手动运行
@@ -150,23 +164,19 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Profile <profile>
 不要加 `--break-system-packages`。直接用 `ocr/setup.py`——它会自动创建虚拟环境，
 绕开系统 Python 的限制。
 
-**Q：TUI 端粘贴图片没反应？**
-先确认终端客户端能读到系统剪贴板图片：Windows/macOS 开箱即用；
-Linux（Wayland）需要安装 `wl-clipboard`（X11 装 `xclip`），否则终端读不到剪贴板
-图片、粘贴会静默失败。装好后重新粘贴即可——图片进入会话后，本插件会自动保存
-并提示模型用 `ocr_image` 识别。
-
-**Q：Web 端粘贴图片没反应？**
-确认插件装到了 web profile、`pasteToPath` 没被改成 `false`、且重启过 `dsh web`。
-
 **Q：识别结果有错字？**
 看输出里的 ⚠ 标注。字太小时模型确实会看走眼：把原图放大一点再试，
 或让 agent 把对应行再确认一遍。
 
+**Q：为什么插件不拦截我的粘贴了？**
+0.4.0 起不再拦截。Web 输入框原生就把粘贴的图片收进附件流程，拦截只会让
+本来能看图的模型反而看不到图。旧配置里的 `pasteToPath` 已失效，可以删掉。
+
 ## 工作原理（一句话）
 
-任何端粘贴的图片（TUI 粘贴 / web 粘贴 / 附件）进入会话后，插件把它保存到
-`~/.dsh/ocr/cache` 并提示模型；模型调 `ocr_image` → 本地 PP-OCRv5 模型
+Web 端粘贴的图片按原生流程进入会话成为附件 → 插件监听 `user/message` 事件 →
+查询当前路由模型的 `inputModalities` → **只有明确不支持图片时**，把图片存到
+`~/.dsh/ocr/cache` 并向模型注入路径提示 → 模型调 `ocr_image` → 本地 PP-OCRv5 模型
 （ONNX Runtime，纯 CPU）→ 文字。模型第一次使用时下载到 `~/.dsh-ocr/models`，
 之后完全离线。更多细节见 [docs/usage.md](docs/usage.md)。
 
@@ -176,7 +186,7 @@ Linux（Wayland）需要安装 `wl-clipboard`（X11 装 `xclip`），否则终�
 npx -y @deepseek-ai/dsh plugin --profile web update dsh-ocr-local
 ```
 
-TUI 端升级后如果粘图失效（插件文件被覆盖），重跑一次安装脚本即可（补丁幂等）。
+从本地目录安装的话，`git pull` 后在插件目录重跑一次 `add` 即可。
 
 ## 许可
 
