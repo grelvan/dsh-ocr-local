@@ -50,23 +50,25 @@ image with ocr_image".
 ### Step 1: Install the plugin
 
 DSH profiles are isolated, so install the plugin into **the profile you use**
-(the Web profile is usually called `web`).
-
-**From a local clone:**
+(the Web profile is usually called `web`):
 
 ```sh
-git clone https://github.com/grelvan/dsh-ocr-local.git
-npx -y @deepseek-ai/dsh plugin --profile web add ./dsh-ocr-local
+npx -y @deepseek-ai/dsh plugin --profile web add dsh-ocr-local
 ```
 
-**Or straight from GitHub:**
+**Or straight from GitHub** (to track the latest commits, or when npm is
+unreachable):
 
 ```sh
 npx -y @deepseek-ai/dsh plugin --profile web add github:grelvan/dsh-ocr-local
 ```
 
-> The old npm release has been unpublished. Once it is republished,
-> `... plugin --profile web add dsh-ocr-local` works again.
+**Or from a local clone:**
+
+```sh
+git clone https://github.com/grelvan/dsh-ocr-local.git
+npx -y @deepseek-ai/dsh plugin --profile web add ./dsh-ocr-local
+```
 
 **Restart dsh** after installing, or the plugin will not take effect.
 

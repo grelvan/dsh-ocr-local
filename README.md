@@ -40,22 +40,24 @@
 
 ### 第 1 步：安装插件
 
-DSH 的 profile 互相隔离，插件要装到**你要用的那个 profile**（Web 端通常叫 `web`）。
-
-**从本地克隆安装：**
+DSH 的 profile 互相隔离，插件要装到**你要用的那个 profile**（Web 端通常叫 `web`）：
 
 ```sh
-git clone https://github.com/grelvan/dsh-ocr-local.git
-npx -y @deepseek-ai/dsh plugin --profile web add ./dsh-ocr-local
+npx -y @deepseek-ai/dsh plugin --profile web add dsh-ocr-local
 ```
 
-**或直接从 GitHub 安装：**
+**也可以直接从 GitHub 安装**（想跟最新提交、或 npm 不可达时）：
 
 ```sh
 npx -y @deepseek-ai/dsh plugin --profile web add github:grelvan/dsh-ocr-local
 ```
 
-> npm 上的旧版本已下架。重新发布后也可以用 `... plugin --profile web add dsh-ocr-local`。
+**或本地克隆后安装：**
+
+```sh
+git clone https://github.com/grelvan/dsh-ocr-local.git
+npx -y @deepseek-ai/dsh plugin --profile web add ./dsh-ocr-local
+```
 
 装完**重启 dsh**，插件才会生效。
 

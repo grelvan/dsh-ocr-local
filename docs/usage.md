@@ -4,9 +4,9 @@
 
 ```sh
 # 1. 安装插件（Web 端 profile，通常是 web）
-git clone https://github.com/grelvan/dsh-ocr-local.git
-npx -y @deepseek-ai/dsh plugin --profile web add ./dsh-ocr-local
-# 或：npx -y @deepseek-ai/dsh plugin --profile web add github:grelvan/dsh-ocr-local
+npx -y @deepseek-ai/dsh plugin --profile web add dsh-ocr-local
+# 想跟最新提交：npx -y @deepseek-ai/dsh plugin --profile web add github:grelvan/dsh-ocr-local
+# 本地克隆：git clone https://github.com/grelvan/dsh-ocr-local.git && npx -y @deepseek-ai/dsh plugin --profile web add ./dsh-ocr-local
 
 # 2. 准备识别引擎（一次即可：venv + 依赖 + 模型，幂等）
 python ~/.dsh/profiles/web/node_modules/dsh-ocr-local/ocr/setup.py
