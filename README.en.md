@@ -371,6 +371,20 @@ up. Three options:
    **SYNC** button in the top-right corner to trigger a manual sync — it lands within
    seconds to a couple of minutes (verified to work).
 
+**Cause 2: this machine installed an old version before, and pnpm cached the old
+packument** (the mirror has synced, pinning works, but a bare `add dsh-ocr-local` keeps
+resolving to the old one — that's this). Note pnpm v10+ keeps the metadata cache inside
+the **store directory** (`pnpm store path` + `/metadata`), so clearing the wrong place
+does nothing. Clear it properly:
+
+```sh
+rm -rf "$(pnpm store path)/metadata" ~/.cache/pnpm/metadata
+pnpm dsh plugin --profile web add dsh-ocr-local
+```
+
+One-time fix; a bare `add` works normally afterwards. This is an npm-ecosystem-wide
+behaviour (true for any package), not specific to this plugin — fresh machines never hit it.
+
 **Q: The install looks frozen / nothing happens?**
 Since 0.4.3 every step reports progress — dependency install shows pip's own output, and
 model download shows a bar like `47% (2MB/4MB) [direct]` plus which source it is using.

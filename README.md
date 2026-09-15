@@ -321,8 +321,10 @@ https_proxy=http://127.0.0.1:7892 http_proxy=http://127.0.0.1:7892 \
 已经下好且校验通过的文件会跳过，放心重跑。
 
 **Q：装不到最新版（`No matching version found`）？**
-你的 npm/pnpm 配了国内镜像（如 `registry.npmmirror.com`），它的同步有延迟 —— 官方 registry
-上已经发布，镜像还在追。三个办法：
+两种成因，对号入座：
+
+**成因一：npm/pnpm 配了国内镜像（如 `registry.npmmirror.com`），同步有延迟** —— 官方 registry
+上已经发布，镜像还在追。四个办法：
 
 1. 临时切官方源装这一次（只影响本次，不改全局配置）：
    `pnpm dsh plugin --profile web add dsh-ocr-local@<版本> --registry=https://registry.npmjs.org/`
@@ -331,6 +333,19 @@ https_proxy=http://127.0.0.1:7892 http_proxy=http://127.0.0.1:7892 \
 3. 等它同步完（通常几十分钟内），之后裸 `add` 即可。
 4. **不想等**：打开 `https://npmmirror.com/package/dsh-ocr-local`，点右上角 **SYNC** 按钮
    手动触发同步，一般几秒到一两分钟生效（实测有效）。
+
+**成因二：本机装过旧版，pnpm 缓存了旧的 packument**（镜像明明已同步、钉版本也能装，
+唯独裸 `add dsh-ocr-local` 永远解析到旧版 —— 就是因为这个）。注意 pnpm v10+ 把
+metadata 缓存放在 **store 目录里**（`pnpm store path` 指向的位置下的 `metadata/`），
+清错地方等于没清。清法：
+
+```sh
+rm -rf "$(pnpm store path)/metadata" ~/.cache/pnpm/metadata
+pnpm dsh plugin --profile web add dsh-ocr-local
+```
+
+清一次即可，之后裸 `add` 永久正常。这是 npm 生态的通病（装任何包都有这个缓存行为），
+不是本插件特有的问题；全新机器不会遇到。
 
 **Q：安装时看着没反应、像卡住了？**
 0.4.3 起每一步都有实时进度——依赖安装会显示 pip 的输出，模型下载会显示
