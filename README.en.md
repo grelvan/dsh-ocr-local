@@ -367,6 +367,9 @@ up. Three options:
 2. Check how far the mirror has synced (curl ships with Windows 10+):
    `curl -s https://registry.npmmirror.com/-/package/dsh-ocr-local/dist-tags`
 3. Wait for it to catch up (usually within tens of minutes), then a plain `add` works.
+4. **Don't want to wait**: open `https://npmmirror.com/package/dsh-ocr-local` and hit the
+   **SYNC** button in the top-right corner to trigger a manual sync — it lands within
+   seconds to a couple of minutes (verified to work).
 
 **Q: The install looks frozen / nothing happens?**
 Since 0.4.3 every step reports progress — dependency install shows pip's own output, and

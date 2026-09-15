@@ -329,6 +329,8 @@ https_proxy=http://127.0.0.1:7892 http_proxy=http://127.0.0.1:7892 \
 2. 查镜像同步到哪了（Win10+ 自带 curl）：
    `curl -s https://registry.npmmirror.com/-/package/dsh-ocr-local/dist-tags`
 3. 等它同步完（通常几十分钟内），之后裸 `add` 即可。
+4. **不想等**：打开 `https://npmmirror.com/package/dsh-ocr-local`，点右上角 **SYNC** 按钮
+   手动触发同步，一般几秒到一两分钟生效（实测有效）。
 
 **Q：安装时看着没反应、像卡住了？**
 0.4.3 起每一步都有实时进度——依赖安装会显示 pip 的输出，模型下载会显示
