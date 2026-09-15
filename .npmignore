@@ -1,0 +1,10 @@
+# 有 .npmignore 时 npm 就不再拿 .gitignore 当忽略规则 —— 否则 `.gitignore`
+# 里的 `/models/` 会把随包发布的模型排除掉（package.json 的 files 也救不回来）。
+.github/
+test/
+docs/
+__pycache__/
+*.pyc
+*.part
+*.tsbuildinfo
+.DS_Store

@@ -4,6 +4,7 @@ lib/
 .DS_Store
 Thumbs.db
 ocr/models/
+/models/
 *.part
 __pycache__/
 *.pyc

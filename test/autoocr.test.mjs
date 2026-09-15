@@ -17,7 +17,15 @@ import { test } from 'node:test'
 // 必须在 import 插件之前设置：插件在模块顶层用 os.homedir() 计算缓存目录。
 const HOME = mkdtempSync(join(tmpdir(), 'dsh-ocr-home-'))
 process.env.HOME = HOME
-const CACHE_DIR = join(HOME, '.dsh', 'ocr', 'cache')
+/**
+ * 每个 host 一个独立缓存目录。
+ *
+ * node:test 会并发跑顶层用例，而缓存目录默认落在 HOME 下——共用一个目录时
+ * `pruneCacheIn` 的 readdir/unlink 会互相打架，落盘异常又被 autoOcr 的
+ * try/catch 吞掉，结果表现为「随机不注入」。隔离后结果与并发度无关。
+ */
+const CACHE_ROOT = mkdtempSync(join(HOME, 'caches-'))
+let hostSeq = 0
 
 let plugin
 let importError
@@ -51,6 +59,7 @@ function createHost(options = {}) {
   const tools = []
   const injected = []
   const stats = { resolveModelInfo: 0, readImage: 0 }
+  const cacheDir = options.cacheDir ?? join(CACHE_ROOT, `h${++hostSeq}`)
 
   const agent = {
     options: agentRoute,
@@ -92,12 +101,15 @@ function createHost(options = {}) {
     },
   }
 
-  plugin.apply(ctx, config)
+  plugin.apply(ctx, { ...config, cacheDir })
 
   return {
     tools,
     injected,
     stats,
+    llm: llmService,
+    ctx,
+    cacheDir,
     session: agent.session,
     async emit(event) {
       for (const [type, handler] of handlers) {
@@ -117,21 +129,21 @@ function createHost(options = {}) {
   }
 }
 
-function cacheFiles() {
+function cacheFiles(dir) {
   try {
-    return readdirSync(CACHE_DIR)
+    return readdirSync(dir)
   } catch {
     return []
   }
 }
 
 /** 缓存目录文件快照，用于断言「这次事件有没有新增落盘」。 */
-function cacheSnapshot() {
-  return new Set(cacheFiles())
+function cacheSnapshot(dir) {
+  return new Set(cacheFiles(dir))
 }
 
-function newCacheFiles(before) {
-  return cacheFiles().filter(name => !before.has(name))
+function newCacheFiles(dir, before) {
+  return cacheFiles(dir).filter(name => !before.has(name))
 }
 
 function injectedText(host) {
@@ -146,7 +158,7 @@ function injectedPath(host) {
 
 test('明确 text-only 的模型：注入路径并把图片写进缓存', needsPeer, async () => {
   const host = createHost({ modalities: ['text'] })
-  const before = cacheSnapshot()
+  const before = cacheSnapshot(host.cacheDir)
   await host.emit(host.imageMessage('a-text'))
 
   assert.equal(host.injected.length, 1, '应当注入一条提示')
@@ -154,19 +166,19 @@ test('明确 text-only 的模型：注入路径并把图片写进缓存', needsP
 
   const path = injectedPath(host)
   assert.ok(path, '提示里应含图片路径')
-  assert.ok(path.startsWith(CACHE_DIR), `路径应落在缓存目录：${path}`)
+  assert.ok(path.startsWith(host.cacheDir), `路径应落在缓存目录：${path}`)
   assert.ok(existsSync(path), '提示里的路径必须真实存在')
-  assert.equal(newCacheFiles(before).length, 1, '应当新增一张图片')
+  assert.equal(newCacheFiles(host.cacheDir, before).length, 1, '应当新增一张图片')
 })
 
 test('支持图片的模型：完全静默，不读附件不落盘不注入', needsPeer, async () => {
   const host = createHost({ modalities: ['text', 'image'] })
-  const before = cacheSnapshot()
+  const before = cacheSnapshot(host.cacheDir)
   await host.emit(host.imageMessage('a-vision'))
 
   assert.equal(host.injected.length, 0, '视觉模型下不应注入')
   assert.equal(host.stats.readImage, 0, '不应读取附件')
-  assert.equal(newCacheFiles(before).length, 0, '不应写入缓存')
+  assert.equal(newCacheFiles(host.cacheDir, before).length, 0, '不应写入缓存')
   assert.equal(host.stats.resolveModelInfo, 1, '应查询过一次能力')
 })
 
@@ -254,4 +266,157 @@ test('工具照常注册（ocr_image / ocr_setup）', needsPeer, async () => {
   const host = createHost()
   const names = host.tools.map(t => t.name).sort()
   assert.deepEqual(names, ['ocr_image', 'ocr_setup'])
+})
+
+/* ------------------------------------------------------------------ */
+/* 准入桥：让纯文本模型收下粘贴的图片（0.4.3）                             */
+/*                                                                     */
+/* Host 在 prompt 准入阶段读 llm.resolveModelInfo 判定图片能力，声明里没有  */
+/* image 就抛 MODEL_DOES_NOT_SUPPORT_IMAGES —— 那时 user/message 还没发生。 */
+/* 桥只在这一个公开方法上补 image，用于放行；请求构造走适配器自己的 catalog， */
+/* 所以图片仍会被服务层投影成文本占位符，适配器拿不到图片字节。             */
+/* ------------------------------------------------------------------ */
+
+test('准入桥：对外把 text-only 补成含 image', needsPeer, async () => {
+  const host = createHost({ modalities: ['text'] })
+  const info = await host.llm.resolveModelInfo('p', 'm')
+  assert.deepEqual(info.inputModalities, ['text', 'image'], '准入视图应含 image')
+})
+
+test('准入桥：声明 image 的模型原样透传，不重复追加', needsPeer, async () => {
+  const host = createHost({ modalities: ['text', 'image'] })
+  const info = await host.llm.resolveModelInfo('p', 'm')
+  assert.deepEqual(info.inputModalities, ['text', 'image'])
+})
+
+test('准入桥：无模态声明原样返回（准入本就放行）', needsPeer, async () => {
+  const host = createHost({ modalities: undefined })
+  const info = await host.llm.resolveModelInfo('p', 'm')
+  assert.equal(info.inputModalities, undefined)
+})
+
+test('准入桥：插件自身判定仍读桥之前的真实能力，text-only 照常介入', needsPeer, async () => {
+  const host = createHost({ modalities: ['text'] })
+  const before = cacheSnapshot(host.cacheDir)
+  await host.emit(host.imageMessage('b-bridge'))
+  assert.equal(host.injected.length, 1, '桥放行准入，不应让插件误判成视觉模型而静默')
+  assert.equal(newCacheFiles(host.cacheDir, before).length, 1)
+})
+
+test('准入桥：视觉模型在桥下依旧静默', needsPeer, async () => {
+  const host = createHost({ modalities: ['text', 'image'] })
+  await host.emit(host.imageMessage('b-vision'))
+  assert.equal(host.injected.length, 0)
+})
+
+test("autoOcr: false 时不安装准入桥（不留下对 Host 准入的改动）", needsPeer, async () => {
+  const host = createHost({ config: { autoOcr: false }, modalities: ['text'] })
+  const info = await host.llm.resolveModelInfo('p', 'm')
+  assert.deepEqual(info.inputModalities, ['text'], '关掉插件就不该改准入行为')
+})
+
+test("autoOcr: 'always' 时也装桥，且不查询能力", needsPeer, async () => {
+  const host = createHost({ config: { autoOcr: 'always' }, modalities: ['text', 'image'] })
+  const info = await host.llm.resolveModelInfo('p', 'm')
+  assert.deepEqual(info.inputModalities, ['text', 'image'])
+})
+
+test('准入桥：同一 llm 实例重复 apply 不叠加包装', needsPeer, async () => {
+  const host = createHost({ modalities: ['text'] })
+  const first = host.llm.resolveModelInfo
+  plugin.apply(host.ctx, {})
+  const second = host.llm.resolveModelInfo
+  assert.equal(first === second, true, '已装过就不该重新包装')
+  const info = await second('p', 'm')
+  assert.deepEqual(info.inputModalities, ['text', 'image'])
+})
+
+test('注入的消息带 id（Message.id 必需）', needsPeer, async () => {
+  const host = createHost({ modalities: ['text'] })
+  await host.emit(host.imageMessage('b-id'))
+  assert.equal(host.injected.length, 1)
+  assert.ok(host.injected[0].id, '注入消息必须有 id')
+  assert.equal(host.injected[0].role, 'user')
+  assert.equal(host.injected[0].source.kind, 'plugin')
+})
+
+/* ------------------------------------------------------------------ */
+/* 0.4.3：让「占位符里的 sha256」直接可用 + 展开 ~                       */
+/*                                                                     */
+/* 注入路径要等下一个 step 才进上下文，模型第一个请求只看到 harness 的     */
+/* [image omitted … attachment sha256:XXXX] 占位符 —— 所以让这个占位符    */
+/* 本身就能用：文件名里写 sha256 短标识，ocr_image 用 ref 回查。          */
+/* ------------------------------------------------------------------ */
+
+test('缓存文件名带上附件短标识，可按 sha256 前缀回查', needsPeer, async () => {
+  const host = createHost({ modalities: ['text'] })
+  const before = cacheSnapshot(host.cacheDir)
+  await host.emit(host.imageMessage(`sha256:${'cd'.repeat(32)}`))
+  const added = newCacheFiles(host.cacheDir, before)
+  assert.equal(added.length, 1, '应当新增一张图片')
+  assert.match(added[0], /-cdcdcdcd\.png$/, `文件名应带附件短标识：${added[0]}`)
+})
+
+test('ocr_image: ref 是首选参数，path 不再必需，描述点名占位符', needsPeer, async () => {
+  const host = createHost()
+  const tool = host.tools.find(t => t.name === 'ocr_image')
+  // defineTool 会把参数 spec 编译成 JSON Schema：看 properties / required。
+  const props = tool.parameters.properties ?? {}
+  const required = tool.parameters.required ?? []
+  assert.ok(props.ref, '应有 ref 参数')
+  assert.ok(props.path, 'path 参数应保留')
+  assert.ok(!required.includes('path'), 'path 不应再是必需参数')
+  assert.ok(!required.includes('ref'), 'ref 也不强制（单独给 path 也要能用）')
+  assert.match(tool.description, /image omitted/, '描述里要点名「[image omitted …]」这个信号')
+})
+
+test('ocr_image: 用占位符里的 sha256 前缀能定位到刚缓存的图片', needsPeer, async () => {
+  const host = createHost({ modalities: ['text'] })
+  await host.emit(host.imageMessage(`sha256:${'ef'.repeat(32)}`))
+  const tool = host.tools.find(t => t.name === 'ocr_image')
+  const result = await tool.execute({ ref: 'efefefef' })
+  // 测试机多半没装 OCR 引擎，result 会带「环境未就绪」；关键是**不该**报「没找到」。
+  assert.ok(!/本地缓存里没有/.test(result.error ?? ''), `不应报找不到：${result.error}`)
+  assert.ok(String(result.path).startsWith(host.cacheDir), `应解析到缓存路径：${result.path}`)
+})
+
+test('ocr_image: 未知 ref 给出可执行的下一步，而不是一句空白', needsPeer, async () => {
+  const host = createHost({ modalities: ['text'] })
+  const tool = host.tools.find(t => t.name === 'ocr_image')
+  const result = await tool.execute({ ref: 'ffffffff' })
+  assert.match(result.error ?? '', /重新发送/, '应提示让用户重发图片')
+})
+
+test('ocr_image: 展开 ~（模型很自然会传 ~/… 路径）', needsPeer, async () => {
+  const host = createHost()
+  const tool = host.tools.find(t => t.name === 'ocr_image')
+  const result = await tool.execute({ path: '~/definitely-not-here-xyz.png' })
+  assert.ok(!String(result.error).includes('：~/'), `报错里不该留着波浪号：${result.error}`)
+  assert.match(result.error ?? '', /图片文件不存在：\//, '应报展开后的绝对路径')
+})
+
+test('ocr_image: ref 里塞了路径也当路径处理（容错）', needsPeer, async () => {
+  const host = createHost()
+  const tool = host.tools.find(t => t.name === 'ocr_image')
+  const result = await tool.execute({ ref: '~/nope-xyz.png' })
+  assert.match(result.error ?? '', /图片文件不存在：\//, '带分隔符的 ref 应按路径处理')
+})
+
+test('ocr_image: 两个参数都不给时明确要一个', needsPeer, async () => {
+  const host = createHost()
+  const tool = host.tools.find(t => t.name === 'ocr_image')
+  const result = await tool.execute({})
+  assert.match(result.error ?? '', /需要 ref/, result.error)
+})
+
+test('ocr_image: 同内容图片在不同 attachmentId 下各自可回查', needsPeer, async () => {
+  const host = createHost({ modalities: ['text'] })
+  const before = cacheSnapshot(host.cacheDir)
+  await host.emit(host.imageMessage(`sha256:${'11'.repeat(32)}`))
+  await host.emit(host.imageMessage(`sha256:${'22'.repeat(32)}`))
+  const added = newCacheFiles(host.cacheDir, before)
+  // 同一份字节（PNG_BYTES）被两次粘贴：内容去重不该让第二张丢掉自己的回查标识。
+  assert.equal(added.length, 2, `两个 attachmentId 都应能回查：${added.join(', ')}`)
+  assert.ok(added.some(n => n.includes('-11111111.')), added.join(', '))
+  assert.ok(added.some(n => n.includes('-22222222.')), added.join(', '))
 })

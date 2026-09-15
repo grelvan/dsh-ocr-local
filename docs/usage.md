@@ -4,12 +4,16 @@
 
 ```sh
 # 1. 安装插件（Web 端 profile，通常是 web）
-npx -y @deepseek-ai/dsh plugin --profile web add dsh-ocr-local
-# 想跟最新提交：npx -y @deepseek-ai/dsh plugin --profile web add github:grelvan/dsh-ocr-local
-# 本地克隆：git clone https://github.com/grelvan/dsh-ocr-local.git && npx -y @deepseek-ai/dsh plugin --profile web add ./dsh-ocr-local
+#    「dsh」怎么调起见 README：PATH 里有 dsh 就用 dsh；在 harness 源码仓库里就用
+#    pnpm dsh plugin ...（或 node apps/cli/lib/bin.js plugin ...）
+dsh plugin --profile web add dsh-ocr-local
+# 想跟最新提交：dsh plugin --profile web add github:grelvan/dsh-ocr-local
+# 本地克隆（开发推荐 link:，改代码重启即生效）：
+#   git clone https://github.com/grelvan/dsh-ocr-local.git
+#   dsh plugin --profile web add link:./dsh-ocr-local
 
 # 2. 准备识别引擎（一次即可：venv + 依赖 + 模型，幂等）
-python ~/.dsh/profiles/web/node_modules/dsh-ocr-local/ocr/setup.py
+python3 ~/.dsh/profiles/web/node_modules/dsh-ocr-local/ocr/setup.py
 
 # 3. 重启 dsh，在 Web 输入框粘贴图片
 ```
@@ -125,10 +129,10 @@ python ~/.dsh/profiles/web/node_modules/dsh-ocr-local/ocr/setup.py
 
 ```sh
 # 逐项检查：python / 依赖 / 模型 sha256（无需依赖即可运行）
-python ~/.dsh/profiles/web/node_modules/dsh-ocr-local/ocr/ocr.py --doctor
+python3 ~/.dsh/profiles/web/node_modules/dsh-ocr-local/ocr/ocr.py --doctor
 
 # 只检查不安装
-python ~/.dsh/profiles/web/node_modules/dsh-ocr-local/ocr/setup.py --check
+python3 ~/.dsh/profiles/web/node_modules/dsh-ocr-local/ocr/setup.py --check
 
 # 插件自身的判定逻辑单测（零依赖）
 npm test

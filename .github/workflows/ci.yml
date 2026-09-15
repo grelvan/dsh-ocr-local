@@ -40,6 +40,117 @@ jobs:
           python3 ocr/setup.py --check --json >/dev/null || true
           echo "doctor/setup smoke OK"
 
+      - name: setup.py --json keeps stdout machine-readable
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          # 插件用 JSON.parse(stdout) 读结果。诊断信息必须走 stderr，
+          # 一旦 stdout 混进 "[setup] …"，插件就只会报「输出无法解析」。
+          python3 ocr/setup.py --check --json >/tmp/out.json 2>/tmp/err.txt || true
+          python3 -c "import json; json.load(open('/tmp/out.json')); print('--json stdout is valid JSON')"
+
+      - name: download_models adapts to slow sources
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          # 「慢」不是「失败」。只按失败回退的话，一个 80KB/s 的直连能把 21MB 磨成五分钟，
+          # 而换个镜像可能就是几秒。用假响应验证三件事：
+          #   1) 慢源被换掉；2) 所有源都慢时最后一轮忍着下完；3) 小文件不因「慢」被丢弃。
+          python3 - <<'PY'
+          import sys, time, hashlib, pathlib
+          sys.path.insert(0, 'ocr')
+          import download_models as d
+
+          d.SPEED_SAMPLE_SECONDS = 0.05
+          d.SPEED_GRACE_SECONDS = 0.1
+          d.min_speed_bytes_per_sec = lambda: 10 * 1024 * 1024  # 任何实测速度都算“慢”
+
+          BIG = b'x' * (2 * 1024 * 1024)
+          BIG_SHA = hashlib.sha256(BIG).hexdigest()
+          SMALL = b'y' * (64 * 1024)
+          SMALL_SHA = hashlib.sha256(SMALL).hexdigest()
+          state = {'slow_all': False}
+
+          class R:
+              def __init__(self, data, delay):
+                  self.data, self.i, self.delay = data, 0, delay
+                  self.headers = {'Content-Length': str(len(data))}
+              def read(self, n):
+                  if self.i >= len(self.data): return b''
+                  if self.delay: time.sleep(self.delay)
+                  out = self.data[self.i:self.i + n]; self.i += n; return out
+              def __enter__(self): return self
+              def __exit__(self, *a): return False
+
+          seen = []
+          def fake(req, timeout=None):
+              url = getattr(req, 'full_url', str(req))
+              seen.append(url)
+              slow = state['slow_all'] or 'ghproxy' not in url
+              return R(BIG, 0.05 if slow else 0)
+
+          d.urllib.request.urlopen = fake
+          dest = pathlib.Path('/tmp/dl.bin')
+
+          dest.unlink(missing_ok=True); seen.clear()
+          assert d.download('https://github.com/x/y', dest, BIG_SHA), 'download should succeed'
+          assert len(seen) == 2, f'slow direct source should be abandoned for the mirror, got {len(seen)}'
+
+          state['slow_all'] = True
+          dest.unlink(missing_ok=True); seen.clear()
+          assert d.download('https://github.com/x/y', dest, BIG_SHA), 'must finish even when every source is slow'
+          expected = len(d.source_urls('https://github.com/x/y')) * (d.RETRIES - 1) + 1
+          assert len(seen) == expected, f'expected {expected} attempts, got {len(seen)}'
+
+          # 小文件一次就读完，不该因为“慢”被丢弃重来
+          d.urllib.request.urlopen = lambda req, timeout=None: R(SMALL, 0.5)
+          p = pathlib.Path('/tmp/small.bin'); p.unlink(missing_ok=True)
+          assert d.try_once('https://x/small', p, SMALL_SHA, '慢源'), 'a small file must not be discarded as "slow"'
+          print('slow-source adaptation OK')
+          PY
+
+      - name: setup.py hides no progress from humans
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          # 非 --json 时必须实时转发子进程输出，否则冷启动观感就是「一直卡在下载」。
+          python3 - <<'PY'
+          import pathlib
+          src = pathlib.Path('ocr/setup.py').read_text(encoding='utf-8')
+          assert 'def _run_streaming' in src, 'streaming runner must exist'
+          body = src.split('def _run_streaming', 1)[1].split('\ndef ', 1)[0]
+          assert 'Popen' in body, 'the streaming runner should use Popen'
+          assert 'capture_output' not in body, 'the streaming runner must not capture output'
+          print('progress forwarding OK')
+          PY
+
+      - name: setup.py detection helpers
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          # has_pip must not be fooled by a bare bin/python: Debian/Deepin builds
+          # `python3 -m venv` "successfully" while leaving pip out (ensurepip is
+          # stripped), which used to be misread as "venv already exists".
+          python3 - <<'PY'
+          import importlib.util, sys
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('ocr_setup', 'ocr/setup.py')
+          mod = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          assert mod.has_pip(Path(sys.executable)), 'has_pip must be True for the running interpreter'
+          assert not mod.has_pip(Path('/nonexistent/bin/python')), 'has_pip must be False for a missing path'
+          p = mod.venv_python(Path('/x'))
+          assert p.name == ('python.exe' if mod.os.name == 'nt' else 'python'), p
+          print('setup.py helpers OK')
+          PY
+
+      - name: No bytecode left behind
+        run: |
+          if find ocr -name '__pycache__' -o -name '*.pyc' | grep -q .; then
+            echo "bytecode was written into ocr/ — the tarball would ship it"; exit 1
+          fi
+          echo "no bytecode OK"
+
       - name: Package validation (npm pack dry-run)
         run: |
           npm pack --dry-run

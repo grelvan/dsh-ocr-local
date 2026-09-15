@@ -20,16 +20,32 @@
  *      only way the model can read the image.
  *    - cannot be determined      → silent (see dsh/capability.js).
  *
+ * 4. Admission bridge: a text-only model declares no `image` capability, and
+ *    the Host's prompt admission reads exactly that declaration to reject a
+ *    pasted image *before* the message ever reaches the session — which would
+ *    make (3) dead code. So this plugin widens `llm.resolveModelInfo`'s
+ *    `inputModalities` with `image` and nothing else; request assembly reads
+ *    the adapter's own catalog, so the image is still projected to a text
+ *    placeholder before it reaches the wire. See `installAdmissionBridge`.
+ *
  * Loaded via cordis.patch.yml; zero runtime dependencies (node builtins).
  */
 import { execFile } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { autoOcrMode, modalityCacheKey, pickRoute, shouldInjectOcrPath } from './capability.js'
+import {
+  attachmentTag,
+  autoOcrMode,
+  modalityCacheKey,
+  pickRoute,
+  refTagOf,
+  shouldInjectOcrPath,
+  withImageCapability,
+} from './capability.js'
 
 export const name = 'dsh-ocr-local'
 export const inject = ['tools', 'agents']
@@ -57,7 +73,7 @@ function venvPythonPath() {
 /** python 解析链：config.pythonPath → DSH_OCR_PYTHON → 内置 venv → python3 → python */
 function resolvePython(config = {}) {
   const candidates = [
-    config.pythonPath,
+    config.pythonPath ? expandHome(String(config.pythonPath)) : undefined,
     process.env.DSH_OCR_PYTHON,
     venvPythonPath(),
     process.platform === 'win32' ? 'python.exe' : 'python3',
@@ -69,27 +85,77 @@ function resolvePython(config = {}) {
   return candidates[0]
 }
 
+/**
+ * 展开开头的 `~`。
+ *
+ * 模型（和用户）非常自然地会写 `~/…`，而 node 的 `existsSync` 不认波浪号 ——
+ * 不展开就会把明明存在的文件判成「不存在」。实测模型自己找到 harness 的附件对象后
+ * 传进来的正是 `~/.dsh/attachments/v1/objects/…`。
+ *
+ * @param p - 原始路径。
+ * @returns 展开后的路径。
+ */
+function expandHome(p) {
+  if (p === '~') return homedir()
+  if (p.startsWith('~/') || p.startsWith('~\\')) return join(homedir(), p.slice(2))
+  return p
+}
+
+/** 图片缓存目录：config.cacheDir 优先（支持 `~`），否则用默认。 */
+function resolveCacheDir(config = {}) {
+  return config.cacheDir ? expandHome(String(config.cacheDir)) : CACHE_DIR
+}
+
+/** 模型目录参数：config.modelDir 优先（支持 `~`），没配就不传。 */
+function modelDirArg(config = {}) {
+  return config.modelDir ? ['--model-dir', expandHome(String(config.modelDir))] : []
+}
+
 /* ------------------------------------------------------------------ */
 /* OCR 执行与诊断                                                        */
 /* ------------------------------------------------------------------ */
+
+/**
+ * 从可能带杂音的 stdout 里取出最后一个 JSON 对象。
+ *
+ * 两个 Python 脚本都会打进度和诊断行，机器要读的那份 JSON 约定放在最后一行。
+ * 逐行倒着找比整段 `JSON.parse` 稳得多 —— 后者一旦被前导的 `[setup] …` 打乱就
+ * 整个失败，用户拿到的只是「输出无法解析」这种毫无信息量的错。
+ *
+ * @param stdout - 子进程的完整 stdout。
+ * @returns 解析出的对象；找不到时返回 null。
+ */
+function parseLastJson(stdout) {
+  const text = String(stdout ?? '').trim()
+  if (!text) return null
+  const lines = text.split('\n')
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i].trim()
+    if (!line.startsWith('{') || !line.endsWith('}')) continue
+    try {
+      return JSON.parse(line)
+    } catch { /* 这行不是合法 JSON，继续往前找 */ }
+  }
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
 
 function runDoctor(config = {}) {
   return new Promise(resolve => {
     const python = resolvePython(config)
     execFile(
       python,
-      ['-X', 'utf8', OCR_SCRIPT, '--doctor', ...(config.modelDir ? ['--model-dir', config.modelDir] : [])],
+      ['-X', 'utf8', OCR_SCRIPT, '--doctor', ...modelDirArg(config)],
       { encoding: 'utf8', windowsHide: true, timeout: 30000 },
       (error, stdout) => {
         if (error) {
           resolve({ ok: false, python: { ok: false, error: 'python 不可用：' + String(error.message || error).slice(0, 120) } })
           return
         }
-        try {
-          resolve(JSON.parse(stdout))
-        } catch {
-          resolve({ ok: false, python: { ok: true, error: 'doctor 输出无法解析' } })
-        }
+        resolve(parseLastJson(stdout) ?? { ok: false, python: { ok: true, error: 'doctor 输出无法解析' } })
       },
     )
   })
@@ -98,25 +164,19 @@ function runDoctor(config = {}) {
 function runOcr(path, config = {}) {
   return new Promise(resolve => {
     const python = resolvePython(config)
-    const args = [OCR_SCRIPT, path, '--full', ...(config.modelDir ? ['--model-dir', config.modelDir] : [])]
+    const args = [OCR_SCRIPT, path, '--full', ...modelDirArg(config)]
     execFile(
       python,
       ['-X', 'utf8', ...args],
       { encoding: 'utf8', windowsHide: true, timeout: 120000, maxBuffer: 32 * 1024 * 1024 },
       (error, stdout) => {
         if (error) {
-          let pyErr = null
-          try {
-            pyErr = JSON.parse(stdout.trim())
-          } catch { /* stdout 不是 JSON */ }
+          const pyErr = parseLastJson(stdout)
           const reason = pyErr && pyErr.error ? pyErr.error : String(error.message || error).slice(0, 300)
           runDoctor(config).then(doctor => resolve({ text: '', path, error: reason, doctor }))
           return
         }
-        let data = null
-        try {
-          data = JSON.parse(stdout)
-        } catch { /* ignore */ }
+        const data = parseLastJson(stdout)
         if (!data || !Array.isArray(data.lines)) {
           resolve({ text: '', path, error: 'OCR 输出无法解析' })
           return
@@ -194,16 +254,17 @@ const IMAGE_EXT = {
   'image/bmp': '.bmp',
 }
 
-/** timestamped cache filename: yyyyMMdd-HHmmss.fffffff-<hash8><ext> */
-function pasteName(ext, hash, now = new Date()) {
+/** timestamped cache filename: yyyyMMdd-HHmmss.fffffff-<hash8>[-<refTag8>]<ext> */
+function pasteName(ext, hash, refTag, now = new Date()) {
   const p = (n, w) => String(n).padStart(w, '0')
-  const base = `${now.getFullYear()}${p(now.getMonth() + 1, 2)}${p(now.getDate(), 2)}-` +
+  const stamp = `${now.getFullYear()}${p(now.getMonth() + 1, 2)}${p(now.getDate(), 2)}-` +
     `${p(now.getHours(), 2)}${p(now.getMinutes(), 2)}${p(now.getSeconds(), 2)}.` +
-    `${p(now.getMilliseconds() * 10000, 7)}-${hash}`
-  return `${base}${ext}`
+    `${p(now.getMilliseconds() * 10000, 7)}`
+  const tail = refTag ? `${hash}-${refTag}` : hash
+  return `${stamp}-${tail}${ext}`
 }
 
-/** 按内容哈希查重：返回已存在的相同图片路径 */
+/** 按内容哈希查重：返回已存在的相同图片路径（兼容带/不带 refTag 两种命名）。 */
 function findByHashIn(hash, dir) {
   let names
   try {
@@ -212,10 +273,26 @@ function findByHashIn(hash, dir) {
     return null
   }
   for (const n of names) {
-    if (n.includes(`-${hash}.`)) {
-      const p = join(dir, n)
-      if (existsSync(p)) return p
-    }
+    if (!n.includes(`-${hash}.`) && !n.includes(`-${hash}-`)) continue
+    const p = join(dir, n)
+    if (existsSync(p)) return p
+  }
+  return null
+}
+
+/** 按附件短标识查图：文件名形如 `…-<hash8>-<refTag8>.png`。 */
+function findByRefTagIn(tag, dir) {
+  if (!tag) return null
+  let names
+  try {
+    names = readdirSync(dir)
+  } catch {
+    return null
+  }
+  for (const n of names) {
+    if (!n.includes(`-${tag}.`)) continue
+    const p = join(dir, n)
+    if (existsSync(p)) return p
   }
   return null
 }
@@ -263,17 +340,33 @@ function pruneCacheIn(dir, maxFiles, maxAgeDays) {
   }
 }
 
-/** 保存图片字节到缓存目录（内容去重 + 类型命名 + 清理）。返回路径。 */
+/**
+ * 保存图片字节到缓存目录（内容去重 + 类型命名 + 按 sha256 短标识回查 + 清理）。
+ *
+ * `opts.refTag` 是附件的 sha256 短标识，会拼进文件名。有它，模型只要把
+ * `[image omitted … attachment sha256:XXXX]` 里的 XXXX 交给 `ocr_image` 的 `ref`
+ * 就能定位到这张图 —— 不用去猜 harness 把附件存在哪。
+ *
+ * @param buffer - 图片字节。
+ * @param mediaType - 声明的媒体类型。
+ * @param opts - 缓存目录、清理策略、refTag。
+ * @returns `{ path, deduped }`。
+ */
 function saveImageToCache(buffer, mediaType, opts = {}) {
   const dir = opts.cacheDir || CACHE_DIR
   const maxFiles = Number(opts.maxFiles ?? 300)
   const maxAgeDays = Number(opts.maxAgeDays ?? 30)
+  const refTag = opts.refTag ? String(opts.refTag).slice(0, 8).toLowerCase() : ''
   const hash = createHash('sha1').update(buffer).digest('hex').slice(0, 8)
   const existing = findByHashIn(hash, dir)
-  if (existing) return { path: existing, deduped: true }
+  // 内容命中还不够：得确认文件名里已经有这次要用的 refTag，否则模型按
+  // sha256 前缀仍然搜不到。缺就另存一份带 tag 的（容量换可用性，值得）。
+  if (existing && (refTag === '' || existing.includes(`-${refTag}.`))) {
+    return { path: existing, deduped: true }
+  }
   mkdirSync(dir, { recursive: true })
   const ext = IMAGE_EXT[mediaType] || '.png'
-  const target = join(dir, pasteName(ext, hash))
+  const target = join(dir, pasteName(ext, hash, refTag))
   writeFileSync(target, buffer)
   pruneCacheIn(dir, maxFiles, maxAgeDays)
   return { path: target, deduped: false }
@@ -301,6 +394,74 @@ function optionalService(ctx, name) {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* 准入桥：让纯文本模型也能收下粘贴的图片                                  */
+/* ------------------------------------------------------------------ */
+
+/** 挂在 llm 服务上的标记，存桥装好之前的 `resolveModelInfo`（已绑定 this）。 */
+const BRIDGE_SLOT = Symbol.for('dsh-ocr-local.admission-bridge')
+
+/**
+ * 把 `llm.resolveModelInfo` 包装成「准入视图」：声明里没有 `image` 的模型补上
+ * `image`，其余原样透传。
+ *
+ * 动机见 {@link withImageCapability} —— Host 的 prompt 准入用这个方法判定图片
+ * 能力，`MODEL_DOES_NOT_SUPPORT_IMAGES` 抛在 `user/message` 事件之前，本插件的
+ * autoOcr 因此在这条路径上永不触发（图片压根没进会话）。
+ *
+ * 安全性由两件事共同保证：
+ *   1. 请求构造走适配器自己的 catalog（`adapter.prepareCall` /
+ *      `adapter.resolveModel`），**不经过这个方法**，所以补出来的 `image`
+ *      不会让适配器去发图片字节；
+ *   2. LLM 服务层按适配器的真实能力把图片投影成
+ *      `[image omitted because this model accepts text only; attachment sha256:…]`
+ *      文本，适配器收到的消息里已经没有图片块。
+ *
+ * 所以这是「放行准入」，不是「谎报能力」。副作用是任何用 `resolveModelInfo`
+ * 做能力预检的消费者（子代理续跑、acp、`read-image` 等）也会一并放行 —— 这
+ * 恰恰是本插件要的结果。
+ *
+ * @param ctx - cordis 上下文。
+ * @returns `{ real }`：桥之前的实现（已绑定 this），供插件自身判定真实能力；
+ *   没装上时为 `{ real: undefined }`。
+ */
+function installAdmissionBridge(ctx) {
+  const state = { real: undefined }
+  const install = llmCtx => {
+    const llm = llmCtx?.llm ?? optionalService(ctx, 'llm')
+    if (!llm || typeof llm.resolveModelInfo !== 'function') return
+    const existing = llm[BRIDGE_SLOT]
+    if (typeof existing === 'function') {
+      state.real = existing
+      return
+    }
+    const original = llm.resolveModelInfo
+    const real = original.bind(llm)
+    const bridged = async (provider, model, signal) => {
+      const info = await real(provider, model, signal)
+      if (!info) return info
+      const modalities = withImageCapability(info.inputModalities)
+      return modalities === info.inputModalities ? info : { ...info, inputModalities: modalities }
+    }
+    llm.resolveModelInfo = bridged
+    llm[BRIDGE_SLOT] = real
+    state.real = real
+    if (typeof ctx.effect === 'function') {
+      ctx.effect(() => () => {
+        if (llm.resolveModelInfo === bridged) {
+          llm.resolveModelInfo = original
+          delete llm[BRIDGE_SLOT]
+        }
+      })
+    }
+  }
+  // 真实 cordis：等 llm 服务就绪再装（已就绪则立即执行）。
+  // 极简宿主（单测的假 ctx）：没有 inject，直接按可选服务取。
+  if (typeof ctx.inject === 'function') ctx.inject(['llm'], install)
+  else install(undefined)
+  return state
+}
+
 /**
  * Auto-OCR: 监听 user/message 里的图片附件，**只在路由到的模型明确不支持
  * 图片输入时**把图片存到 ~/.dsh/ocr/cache 并把路径注入 agent 上下文，让该模型
@@ -310,11 +471,13 @@ function optionalService(ctx, name) {
  * 视觉模型下插件完全静默：harness 自己会在图片前附带只读副本路径，模型需要
  * 逐字核对时可直接调 ocr_image。判定逻辑见 dsh/capability.js。
  */
-function registerAutoOcr(ctx, config = {}) {
+function registerAutoOcr(ctx, config = {}, bridge = {}) {
   const mode = autoOcrMode(config)
   if (mode === 'off') return
   const maxFiles = Number(config.maxCacheFiles ?? 300)
   const maxAgeDays = Number(config.maxCacheAgeDays ?? 30)
+  // 缓存目录可覆盖（默认 ~/.dsh/ocr/cache，config 里支持 ~）；多实例并存时各自独立。
+  const cacheDir = resolveCacheDir(config)
   // 已处理过的附件引用（防事件重放重复注入）；有界缓存。
   const seen = new Set()
   // session.id → 用户刚切换、尚未发请求的模型选择（来源优先级见 pickRoute）。
@@ -330,8 +493,12 @@ function registerAutoOcr(ctx, config = {}) {
     let modalities
     try {
       const llm = optionalService(ctx, 'llm')
-      if (llm && typeof llm.resolveModelInfo === 'function') {
-        const info = await llm.resolveModelInfo(route.provider, route.model)
+      // ⚠ 必须读「准入桥之前」的实现：桥对外把 text-only 补成含 image，
+      // 拿它判定会把纯文本模型误判成视觉模型 → 永久静默 → 本插件失效。
+      const resolve = bridge.real
+        ?? (llm && typeof llm.resolveModelInfo === 'function' ? llm.resolveModelInfo.bind(llm) : undefined)
+      if (resolve) {
+        const info = await resolve(route.provider, route.model)
         if (Array.isArray(info?.inputModalities) && info.inputModalities.length > 0) {
           modalities = [...info.inputModalities]
         }
@@ -380,7 +547,12 @@ function registerAutoOcr(ctx, config = {}) {
         const stored = await attachments.readImage(ref)
         const bytes = Buffer.from(stored.data ?? stored)
         if (bytes.length === 0) continue
-        const saved = saveImageToCache(bytes, ref.mediaType || 'image/png', { maxFiles, maxAgeDays })
+        const saved = saveImageToCache(bytes, ref.mediaType || 'image/png', {
+          maxFiles,
+          maxAgeDays,
+          cacheDir,
+          refTag: attachmentTag(ref),
+        })
         if (refKey) seen.add(refKey)
         paths.push(saved.path)
       } catch { /* 附件读取失败则跳过，不影响其它图片 */ }
@@ -388,6 +560,7 @@ function registerAutoOcr(ctx, config = {}) {
     if (seen.size > 5000) seen.clear()
     if (paths.length === 0) return
     agent.inject({
+      id: randomUUID(),
       role: 'user',
       content: [{
         type: 'text',
@@ -415,42 +588,51 @@ function runSetup(python, argv) {
       ['-X', 'utf8', ...argv],
       { encoding: 'utf8', windowsHide: true, timeout: 900000, maxBuffer: 16 * 1024 * 1024 },
       (error, stdout, stderr) => {
-        if (error) {
-          let data = null
-          try {
-            data = JSON.parse(stdout.trim())
-          } catch { /* ignore */ }
-          resolve(data || { ok: false, error: (data?.error) || String(error.message || error).slice(0, 300) + (stderr ? ' / ' + stderr.slice(-200) : '') })
+        // `--json` 模式下机器要读的那份 JSON 一定在 stdout 最后一行；诊断信息走 stderr。
+        const data = parseLastJson(stdout)
+        if (data) {
+          resolve(data)
           return
         }
-        try {
-          resolve(JSON.parse(stdout.trim()))
-        } catch {
-          resolve({ ok: false, error: 'setup 输出无法解析' })
-        }
+        const detail = String(error?.message || error || '').slice(0, 200)
+        const tail = String(stderr || '').trim().split('\n').slice(-4).join('\n')
+        resolve({ ok: false, error: [detail, tail].filter(Boolean).join('\n') || 'setup 输出无法解析' })
       },
     )
   })
 }
 
 export function apply(ctx, config = {}) {
-  registerAutoOcr(ctx, config)
+  // autoOcr 关闭时连准入桥都不装：不留下任何对 Host 准入行为的改动。
+  const bridge = autoOcrMode(config) === 'off' ? {} : installAdmissionBridge(ctx)
+  registerAutoOcr(ctx, config, bridge)
 
   ctx.tools.register(defineTool({
     name: 'ocr_image',
     description:
-      'Run local OCR (PP-OCRv5, fully offline) on an image file and return its text content. ' +
-      'Use it when the user references an image file and you need the text in it — no vision model ' +
-      'required. With a model that accepts image input the harness also sends the image itself plus a ' +
-      'read-only copy path; call this tool on that path when you need verbatim characters (code, error ' +
-      'messages, logs, table numbers) or per-line confidence instead of a visual reading. ' +
-      'Returns the recognized text lines with per-line confidence, or a diagnosis (plus a hint to run ' +
-      'the ocr_setup tool) when the OCR engine is not installed yet.',
+      'Run local OCR (PP-OCRv5, fully offline) on an image and return its text — no vision model required. ' +
+      'PRIMARY USE: when the conversation contains a placeholder like ' +
+      '"[image omitted because this model accepts text only; attachment sha256:2cd17c8d…]", ' +
+      'that placeholder IS the signal to call this tool: pass that sha256 as `ref` ' +
+      '(the bare 8-character prefix is enough, e.g. ref: "2cd17c8d"). The plugin already saved that ' +
+      'image locally when the message arrived, so do NOT go hunting the filesystem for it — just call ' +
+      'this tool with the sha256 from the placeholder. ' +
+      'Also usable with an explicit `path` (absolute, or ~/…) for any image file on disk, and — with a ' +
+      'model that accepts image input — on the read-only copy path the harness sends beside the image, ' +
+      'when you need verbatim characters (code, error messages, logs, table numbers) or per-line confidence ' +
+      'instead of a visual reading. ' +
+      'Returns the recognized text lines with per-line confidence, or a diagnosis (plus a hint to run the ' +
+      'ocr_setup tool) when the OCR engine is not installed yet.',
     parameters: {
+      ref: {
+        type: 'string',
+        description:
+          'The "sha256:…" value (or its 8-character prefix) from an "[image omitted …]" placeholder. ' +
+          'Preferred for images the user just sent. A file path is also accepted.',
+      },
       path: {
         type: 'string',
-        required: true,
-        description: 'Absolute path of the image file (png/jpg/webp).',
+        description: 'Absolute path of an image file (png/jpg/webp); ~/… is expanded. Use when there is no placeholder to read.',
       },
       full: {
         type: 'boolean',
@@ -462,12 +644,41 @@ export function apply(ctx, config = {}) {
       render: (_args, value) => [{ type: 'text', text: renderText(value) }],
     },
     execute: async args => {
-      const path = String(args.path ?? '').trim()
-      if (!path) return { text: '', error: '缺少 path 参数（图片文件路径）', path: '' }
-      if (!existsSync(path)) {
-        return { text: '', error: `图片文件不存在：${path}`, path }
+      const rawRef = String(args.ref ?? '').trim()
+      const rawPath = String(args.path ?? '').trim()
+      let target = ''
+      let tag = ''
+      if (rawPath) {
+        target = expandHome(rawPath)
+      } else if (rawRef) {
+        // 容错：模型可能把路径塞进 ref。带分隔符的一律按路径处理。
+        if (/[/\\]/.test(rawRef)) target = expandHome(rawRef)
+        else tag = refTagOf(rawRef)
       }
-      const result = await runOcr(path, config)
+      if (!target && !tag) {
+        return {
+          text: '',
+          path: '',
+          error: '需要 ref（"[image omitted …]" 占位符里的附件 sha256，如 2cd17c8d）或 path（图片文件路径）',
+        }
+      }
+      if (!target && tag) {
+        const dir = resolveCacheDir(config)
+        const found = findByRefTagIn(tag, dir) || findByHashIn(tag, dir)
+        if (!found) {
+          return {
+            text: '',
+            path: '',
+            error: `本地缓存里没有与 "${rawRef}" 对应的图片（缓存可能已被清理，或这张图不是本次会话收到的那张）。`
+              + '请让用户重新发送一次图片后重试；也可以直接用 path 指定文件。',
+          }
+        }
+        target = found
+      }
+      if (!existsSync(target)) {
+        return { text: '', error: `图片文件不存在：${target}`, path: target }
+      }
+      const result = await runOcr(target, config)
       if (args.full) result.full = { lines: result.lines || [], blocks: result.blocks || [] }
       return result
     },
@@ -504,7 +715,7 @@ export function apply(ctx, config = {}) {
       if (args.checkOnly) argv.push('--check')
       if (args.noModels) argv.push('--no-models')
       if (args.force) argv.push('--force')
-      if (config.modelDir) argv.push('--model-dir', config.modelDir)
+      argv.push(...modelDirArg(config))
       const result = await runSetup(python, argv)
       result.checkOnly = Boolean(args.checkOnly)
       return result
