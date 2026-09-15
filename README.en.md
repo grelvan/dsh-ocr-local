@@ -357,6 +357,17 @@ You can also pin one mirror (pinning disables the fallback):
 `DSH_OCR_MODELS_MIRROR=https://ghproxy.com/ python3 …/ocr/setup.py`.
 Files already downloaded and sha256-verified are skipped, so re-running is cheap.
 
+**Q: Cannot install the latest version (`No matching version found`)?**
+Your npm/pnpm is pointed at a regional mirror (e.g. `registry.npmmirror.com`), which syncs
+with a delay — the version is already on the official registry, the mirror is just catching
+up. Three options:
+
+1. Point at the official registry for this one install (does not change global config):
+   `pnpm dsh plugin --profile web add dsh-ocr-local@<version> --registry=https://registry.npmjs.org/`
+2. Check how far the mirror has synced (curl ships with Windows 10+):
+   `curl -s https://registry.npmmirror.com/-/package/dsh-ocr-local/dist-tags`
+3. Wait for it to catch up (usually within tens of minutes), then a plain `add` works.
+
 **Q: The install looks frozen / nothing happens?**
 Since 0.4.3 every step reports progress — dependency install shows pip's own output, and
 model download shows a bar like `47% (2MB/4MB) [direct]` plus which source it is using.

@@ -320,6 +320,16 @@ https_proxy=http://127.0.0.1:7892 http_proxy=http://127.0.0.1:7892 \
 `DSH_OCR_MODELS_MIRROR=https://ghproxy.com/ python3 …/ocr/setup.py`。
 已经下好且校验通过的文件会跳过，放心重跑。
 
+**Q：装不到最新版（`No matching version found`）？**
+你的 npm/pnpm 配了国内镜像（如 `registry.npmmirror.com`），它的同步有延迟 —— 官方 registry
+上已经发布，镜像还在追。三个办法：
+
+1. 临时切官方源装这一次（只影响本次，不改全局配置）：
+   `pnpm dsh plugin --profile web add dsh-ocr-local@<版本> --registry=https://registry.npmjs.org/`
+2. 查镜像同步到哪了（Win10+ 自带 curl）：
+   `curl -s https://registry.npmmirror.com/-/package/dsh-ocr-local/dist-tags`
+3. 等它同步完（通常几十分钟内），之后裸 `add` 即可。
+
 **Q：安装时看着没反应、像卡住了？**
 0.4.3 起每一步都有实时进度——依赖安装会显示 pip 的输出，模型下载会显示
 `47% (2MB/4MB) [直连]` 这种进度条和当前用的源。如果**确实**长时间没有任何新行，
