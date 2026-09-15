@@ -1,7 +1,7 @@
 {
   "name": "dsh-ocr-local",
   "description": "Local OCR fallback for DeepSeek Harness (Web): when the routed model cannot accept image input, a pasted image is saved locally and its text read by PP-OCRv5 + ONNX Runtime — fully offline, no vision model required. / DeepSeek Harness 本地 OCR 兜底插件（Web）：当接入的模型不支持图片输入时，自动把图片存到本地并用 PP-OCRv5 读出文字，完全离线。",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "license": "MIT",
   "repository": {
