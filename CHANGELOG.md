@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.1] - 2026-09-15
+
+### 文档
+
+- 修复 README 的 GitHub 徽章。静态 badge 用 `%2F` 转义斜杠时，GitHub 与 npm 页面的图片
+  都会经图片代理（camo）取图，而该代理会把 `%2F` 还原成路径分隔符——shields.io 的路由因此
+  匹配失败，返回兜底图 `404 badge not found`（浏览器直连却能正常显示，所以此前不易察觉）。
+  现改为下划线写法 `GitHub-grelvan_dsh--ocr--local-2f81f7`，渲染为 `GitHub: grelvan dsh-ocr-local`。
+- 提示：README 随 tarball 一起发布，已发布版本的 README 不可修改，npm 页面上的徽章
+  需要发新版本才会同步。
+
 ## [0.4.0] - 2026-09-11
 
 **定位变更（BREAKING）**：从「给文本模型装眼睛」改为「**只在接入明确不支持多模态的
