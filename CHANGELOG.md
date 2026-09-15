@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.2] - 2026-09-15
+
+### 修复
+
+- **peer 范围与当前 harness 脱节**：`@deepseek-ai/dsh-tools` 原声明 `^0.0.1-rc.1`
+  （等价于 `>=0.0.1-rc.1 <0.0.2`），而 harness 已经走到
+  `@deepseek-ai/dsh@0.1.5-rc.1` → `dsh-base@0.1.5-rc.1` → `dsh-tools ^0.1.5-rc.1`，
+  该范围**匹配不到任何 0.1.x**。本机之所以一直没报错，是因为 npm 上 `dsh-tools`
+  的 `latest` tag 仍停在 `0.0.1-rc.1`（`next` 才是 `0.1.5-rc.2`），安装时解析到了旧包。
+  现改为 `>=0.0.1-rc.1 <0.1.0 || >=0.1.5-rc.1 <0.2.0-0`。
+- 顺带记下 node-semver 的预发布规则：带预发布标签的版本，只有当范围内**同一
+  `major.minor.patch` 元组**上存在同样带预发布标签的比较符时才会放行。所以
+  `^0.0.1-rc.1` 这类写法会静默排除 harness 的全部预发布构建；`*` 也不行——实测
+  连 `0.1.5-rc.2` 都匹配不上。必须用 `||` 显式给出预发布分支（这也是
+  awesome-dsh-plugin 贡献指南推荐的形式）。
+- `@deepseek-ai/cordis` 保持 `^4.0.1` 不动：当前 harness 依赖 `cordis ^4.0.2`，
+  实测 `4.0.2` 满足该范围。
+
 ## [0.4.1] - 2026-09-15
 
 ### 文档
