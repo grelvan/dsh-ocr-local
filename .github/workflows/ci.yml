@@ -24,6 +24,8 @@ jobs:
         run: npm install --no-save --no-package-lock --no-audit --no-fund @deepseek-ai/dsh-tools@0.0.1-rc.1
 
       - name: Unit + integration tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
         run: npm test
 
       - name: Python syntax check
@@ -146,8 +148,12 @@ jobs:
 
       - name: No bytecode left behind
         run: |
-          if find ocr -name '__pycache__' -o -name '*.pyc' | grep -q .; then
-            echo "bytecode was written into ocr/ — the tarball would ship it"; exit 1
+          found=$(find ocr -name '__pycache__' -o -name '*.pyc' 2>&1 || true)
+          if [ -n "$found" ]; then
+            echo "bytecode found in ocr/:"
+            echo "$found"
+            ls -la ocr/ 2>/dev/null || true
+            exit 1
           fi
           echo "no bytecode OK"
 
