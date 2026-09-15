@@ -2,7 +2,7 @@
 
 [English](README.en.md) · [中文](README.md)
 
-[![license](https://img.shields.io/npm/l/dsh-ocr-local?style=flat-square)](LICENSE) [![GitHub](https://img.shields.io/badge/GitHub-grelvan%2Fdsh--ocr--local-2f81f7?style=flat-square)](https://github.com/grelvan/dsh-ocr-local)
+[![license](https://img.shields.io/npm/l/dsh-ocr-local?style=flat-square)](LICENSE) [![GitHub](https://img.shields.io/badge/GitHub-grelvan_dsh--ocr--local-2f81f7?style=flat-square)](https://github.com/grelvan/dsh-ocr-local)
 
 A **local OCR fallback** for DeepSeek Harness (Web): when the model a session is
 routed to **cannot accept image input**, this plugin reads the text out of a

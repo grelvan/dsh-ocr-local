@@ -2,7 +2,7 @@
 
 [English](README.en.md) · [中文](README.md)
 
-[![license](https://img.shields.io/npm/l/dsh-ocr-local?style=flat-square)](LICENSE) [![GitHub](https://img.shields.io/badge/GitHub-grelvan%2Fdsh--ocr-local-2f81f7?style=flat-square)](https://github.com/grelvan/dsh-ocr-local)
+[![license](https://img.shields.io/npm/l/dsh-ocr-local?style=flat-square)](LICENSE) [![GitHub](https://img.shields.io/badge/GitHub-grelvan_dsh--ocr--local-2f81f7?style=flat-square)](https://github.com/grelvan/dsh-ocr-local)
 
 给 DeepSeek Harness（Web 端）装一个**本地 OCR 兜底**：当会话路由到的模型**不支持图片输入**时，
 把图片里的文字读出来给模型；模型能看图时，插件完全静默、不插手。
