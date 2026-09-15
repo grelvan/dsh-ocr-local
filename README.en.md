@@ -371,6 +371,12 @@ up. Three options:
    **SYNC** button in the top-right corner to trigger a manual sync — it lands within
    seconds to a couple of minutes (verified to work).
 
+> If the mirror has synced, `@<version>` installs fine, but a bare `add dsh-ocr-local`
+> still resolves to the old one — that's the package manager's local metadata cache
+> (both npm and pnpm keep one). Fastest bypass: install once from the official registry
+> with `--registry=https://registry.npmjs.org/`, or install straight from the tarball
+> URL (see below).
+
 **Cause 2: this machine installed an old version before, and pnpm cached the old
 packument** (the mirror has synced, pinning works, but a bare `add dsh-ocr-local` keeps
 resolving to the old one — that's this). pnpm's HTTP cache lives in

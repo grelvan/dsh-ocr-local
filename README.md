@@ -334,25 +334,9 @@ https_proxy=http://127.0.0.1:7892 http_proxy=http://127.0.0.1:7892 \
 4. **不想等**：打开 `https://npmmirror.com/package/dsh-ocr-local`，点右上角 **SYNC** 按钮
    手动触发同步，一般几秒到一两分钟生效（实测有效）。
 
-**成因二：本机装过旧版，pnpm 缓存了旧的 packument**（镜像明明已同步、钉版本也能装，
-唯独裸 `add dsh-ocr-local` 永远解析到旧版 —— 就是因为这个）。pnpm 的 HTTP 缓存在
-`~/.cache/pnpm/_cacache`（**不是** `metadata/` 子目录 —— v10+ 的 packument 缓存走
-make-fetch-happen，清 `metadata/` 没用）。两个清法：
-
-```sh
-rm -rf ~/.cache/pnpm/_cacache
-pnpm dsh plugin --profile web add dsh-ocr-local
-```
-
-或者更直接 —— 让 profile 走官方 registry（换 URL 后缓存键必然失效，一定拉到新数据）：
-
-```sh
-echo "registry=https://registry.npmjs.org/" > ~/.dsh/profiles/web/.npmrc
-pnpm dsh plugin --profile web add dsh-ocr-local
-```
-
-清一次即可，之后裸 `add` 永久正常。这是 npm 生态的通病（装任何包都有这个缓存行为），
-不是本插件特有的问题；全新机器不会遇到。
+> 如果镜像已同步、`@版本号` 也能装，但裸 `add dsh-ocr-local` 还是旧版 —— 那是包管理器
+> 本地的元数据缓存（npm/pnpm 都有）。最快的绕过：用官方源装一次
+> `--registry=https://registry.npmjs.org/`，或直接给 tarball 地址装（见下）。
 
 **Q：安装时看着没反应、像卡住了？**
 0.4.3 起每一步都有实时进度——依赖安装会显示 pip 的输出，模型下载会显示
