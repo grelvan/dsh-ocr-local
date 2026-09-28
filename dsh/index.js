@@ -567,9 +567,13 @@ function registerAutoOcr(ctx, config = {}, bridge = {}) {
         text: '用户附上了图片，当前模型不支持图片输入，图片已保存到本地缓存。'
           + '请用 ocr_image 工具读取其中的文字：\n' + paths.join('\n'),
       }],
+      // session format v4 只接受 producer-owned 的 source kind：`kind: 'plugin'`
+      // 是已下线的 wrapper 写法，写入时会被编码器的准入校验拒绝
+      // （`format v4 message requires a producer-owned source kind`），
+      // 注入随之丢失、本轮失败。kind 自带产出来源，故不再单列 `plugin` 字段——
+      // 这与 harness 的 v3→v4 迁移给未注册插件生成的写法一致。
       source: {
-        kind: 'plugin',
-        plugin: 'dsh-ocr-local',
+        kind: 'plugin:dsh-ocr-local',
         form: 'notice',
         summary: `已保存 ${paths.length} 张图片到本地 OCR 缓存`,
       },

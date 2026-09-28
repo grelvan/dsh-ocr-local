@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.4] - 2026-09-28
+
+### 修复
+
+- **原生 v4 会话里注入直接失败，本轮报 `format v4 message requires a producer-owned
+  source kind`**。注入消息的 `source.kind` 写的是 `'plugin'`，而 session format v4 把
+  这个值当作**已下线的 wrapper 写法**拒绝：写入时每条事件都要过编码器准入
+  （`session-format-v3-to-v4` 的 `codec.encodeEvent` → `assertV4RowAdmission` →
+  `assertV4SourceRowAdmission`），命中即抛错，注入的消息写不进会话，本轮失败。
+  - 修法：`kind` 改为 `'plugin:dsh-ocr-local'`，并删掉随之冗余的 `plugin` 字段
+    （产出来源已在 kind 里）。这个拼写与 harness 的 v3→v4 迁移给未注册插件生成的
+    写法一致，避免同一插件在日志里出现两种身份。
+  - **为什么表现得很随机**：v3→v4 迁移会**顺手改写**这个字段
+    （`{kind:'plugin', plugin:'X'}` → `{kind:'plugin:X'}`），所以**从 v3 迁移来的会话
+    一切正常**，而**新建的原生 v4 会话**直接撞上准入校验。症状因此看起来时好时坏。
+  - **一个被掩盖的后果**：0.4.0 起的「自动注入缓存路径」在原生 v4 会话里**从未生效**
+    ——模型之所以还能调 `ocr_image`，是因为读了用户消息里的
+    `[image omitted … attachment sha256:…]` 占位符并把它当 `ref`（0.4.3 的能力），
+    而不是因为收到了注入的路径。修好之后注入才真正落到上下文里。
+  - 回归测试：新增单测断言注入消息的 `source.kind` 不是 `'plugin'` 且点名
+    `dsh-ocr-local`（`test/autoocr.test.mjs`）。
+
 ## [0.4.3] - 2026-09-15
 
 ### 修复

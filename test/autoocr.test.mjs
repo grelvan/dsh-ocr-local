@@ -337,7 +337,20 @@ test('注入的消息带 id（Message.id 必需）', needsPeer, async () => {
   assert.equal(host.injected.length, 1)
   assert.ok(host.injected[0].id, '注入消息必须有 id')
   assert.equal(host.injected[0].role, 'user')
-  assert.equal(host.injected[0].source.kind, 'plugin')
+  assert.equal(host.injected[0].source.kind, 'plugin:dsh-ocr-local')
+})
+
+test('注入消息的 source.kind 是 producer-owned（v4 拒绝已下线的 "plugin"）', needsPeer, async () => {
+  const host = createHost({ modalities: ['text'] })
+  await host.emit(host.imageMessage('b-kind'))
+  const { kind } = host.injected[0].source
+  // session format v4 的编码器准入会拒绝 `kind: 'plugin'`，抛出
+  // `format v4 message requires a producer-owned source kind` ——
+  // 那条消息写不进会话，本轮直接失败。
+  assert.notEqual(kind, 'plugin', 'v4 已下线 kind:"plugin"，写入时会被拒绝')
+  assert.equal(typeof kind, 'string')
+  assert.ok(kind.length > 0)
+  assert.ok(kind.includes('dsh-ocr-local'), `kind 应点名产出来源，实际 ${kind}`)
 })
 
 /* ------------------------------------------------------------------ */
