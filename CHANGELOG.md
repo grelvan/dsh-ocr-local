@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.1] - 2026-10-21
+
+### 修复
+
+- **DSH 0.2.1-rc.2 下插件被判「版本不兼容」，设置页标红、开关被禁**。报错原文：
+  `dsh-ocr-local@0.5.0 与 DSH 0.2.1-rc.2 不兼容（要求 @deepseek-ai/dsh-tools
+  >=0.0.1-rc.1 <0.1.0 || >=0.1.5-rc.1 <0.2.0-0）`。
+  - 真因：`peerDependencies` 的上界写死成 `<0.2.0-0`，而 DSH 已发到 **0.2.1**，
+    单看 semver 就超界了。**这不是真的 API 断裂**——插件用到的入口在 0.2.1 里
+    逐个核对过，全部存续且签名未变：
+    `defineTool` / `tools.register`、`llm.resolveModelInfo`、
+    `agents.get` / `agents.list` / `agent.inject`、
+    `session/event` 及其 `user/message`、`model/selection` 事件。
+  - 修法：上界抬到 `<0.3.0-0`（`>=0.1.5-rc.1 <0.3.0-0`），把整个 0.2.x 纳入。
+    下界不动，仍然排掉 0.0.1-rc.1 ~ 0.1.5-rc.1 那段确实不兼容的区间。
+  - 顺带一提：宿主设置页把版本号渲染成了 `0.21.rc.2` / `0.15.rc.1`
+    （`0.2.1-rc.2` / `0.1.5-rc.1` 掉了分隔符），排查时容易看岔。
+
 ## [0.5.0] - 2026-09-28
 
 ### 修复
